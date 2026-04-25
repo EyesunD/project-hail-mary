@@ -1,0 +1,41 @@
+# Project Hail Mary — example strategy configuration
+# Copy to configs/local/ and edit for your own strategies.
+
+strategy:
+  name: momentum_quality_blend
+  description: >
+    Long-only monthly-rebalanced portfolio blending 12-1 momentum
+    and composite quality scores. Top quintile by composite score.
+
+data:
+  provider: yahoo           # yahoo | alpaca | polygon | csv
+  universe: SP500           # index name or a list of tickers
+  start: "2015-01-01"
+  end: "2023-12-31"
+  timeframe: 1d
+
+model:
+  factors:
+    - name: momentum
+      lookback: 252
+      skip: 21
+      weight: 1.0
+    - name: quality
+      weight: 1.0
+  combination: equal         # equal | custom | ic_weighted
+
+portfolio:
+  construction: quantile     # quantile | score_weighted | optimised
+  n_quantiles: 5
+  long_short: false
+  max_weight: 0.05           # 5% single-position cap
+
+backtest:
+  initial_capital: 1_000_000
+  rebalance_frequency: ME    # pandas offset: ME=month-end, QE=quarter-end
+  execution:
+    slippage_bps: 5          # one-way slippage
+    commission: 0.001        # 10bps round-trip
+
+risk_free_rate: 0.05         # annualised, for Sharpe / alpha calculation
+benchmark: SPY               # ticker used as benchmark NAV

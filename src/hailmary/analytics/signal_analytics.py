@@ -124,6 +124,73 @@ class SignalAnalytics:
             risk_free_rate=risk_free_rate,
         )
 
+    def portfolio_equity_fixed_amount(
+        self,
+        method: str = "mtc",
+        amount_per_entry: float = 1_000.0,
+    ) -> pd.Series:
+        """Portfolio NAV assuming a fixed dollar amount is deployed on each entry.
+
+        Each entry deploys exactly *amount_per_entry* dollars.  Within a trade
+        the position value compounds — gains and losses apply to the current
+        position value, not the original stake.  On exit the realised P&L
+        accumulates as cash; the next entry always starts with a fresh
+        *amount_per_entry* stake regardless of prior results.
+
+        The initial NAV is normalised to 1.0 (representing
+        ``amount_per_entry × N_universe``, the capital required if every symbol
+        enters simultaneously).
+
+        Args:
+            method: ``"mtc"`` (default), ``"conservative"``, or ``"net"``.
+            amount_per_entry: Dollar amount deployed on each entry (default 1 000).
+
+        Returns:
+            pd.Series of portfolio NAV indexed by timestamp, normalised to 1.0.
+        """
+        return self._portfolio_equity_fixed_amount(method, amount_per_entry)
+
+    def portfolio_returns_fixed_amount(
+        self,
+        method: str = "mtc",
+        amount_per_entry: float = 1_000.0,
+    ) -> pd.Series:
+        """Daily returns for the fixed-amount portfolio.
+
+        Args:
+            method: ``"mtc"`` (default), ``"conservative"``, or ``"net"``.
+            amount_per_entry: Dollar amount deployed on each entry (default 1 000).
+
+        Returns:
+            pd.Series of daily returns indexed by timestamp.
+        """
+        return (
+            self._portfolio_equity_fixed_amount(method, amount_per_entry)
+            .pct_change()
+            .fillna(0)
+        )
+
+    def portfolio_metrics_fixed_amount(
+        self,
+        method: str = "mtc",
+        amount_per_entry: float = 1_000.0,
+        risk_free_rate: float = 0.0,
+    ) -> PerformanceMetrics:
+        """Return a :class:`~hailmary.analytics.PerformanceMetrics` for the fixed-amount portfolio.
+
+        Args:
+            method: ``"mtc"`` (default), ``"conservative"``, or ``"net"``.
+            amount_per_entry: Dollar amount deployed on each entry (default 1 000).
+            risk_free_rate: Annualised risk-free rate (default 0).
+
+        Returns:
+            :class:`PerformanceMetrics` instance.
+        """
+        return PerformanceMetrics(
+            self.portfolio_returns_fixed_amount(method=method, amount_per_entry=amount_per_entry),
+            risk_free_rate=risk_free_rate,
+        )
+
     # ----------------------------------------------------------------- private
 
     def _portfolio_returns_rebalanced(self, method: str) -> pd.Series:
@@ -151,3 +218,48 @@ class SignalAnalytics:
         }[method]
         equity_wide = self._data[equity_col].unstack(level="symbol")
         return equity_wide.mean(axis=1).rename(f"portfolio_equity_{method}_reinvested")
+
+    def _portfolio_equity_fixed_amount(self, method: str, amount_per_entry: float) -> pd.Series:
+        """NAV curve for the fixed-dollar-per-entry capital model.
+
+        Within each trade the position compounds from amount_per_entry.
+        Realised P&L from closed trades accumulates as cash and does not
+        affect the entry size of future trades.
+        """
+        ret_col = {
+            "mtc": "return_mark_to_close",
+            "conservative": "return_conservative",
+            "net": "return_net",
+        }[method]
+
+        df = self._data[[ret_col, "cycle", "trade_cycle_id"]]
+        in_trade_mask = df["cycle"] != "None"
+        exit_mask = df["cycle"] == "exit"
+
+        # Within-trade cumulative equity: (1+r_1)(1+r_2)…(1+r_t) per (symbol, trade)
+        in_trade_df = df[in_trade_mask]
+        sym_level = in_trade_df.index.get_level_values("symbol")
+        within_trade_equity = (
+            in_trade_df[ret_col]
+            .groupby([sym_level, in_trade_df["trade_cycle_id"]])
+            .transform(lambda x: (1 + x).cumprod())
+            .reindex(df.index)  # NaN on flat bars
+        )
+
+        # Unrealised P&L per (symbol, bar): amount × (equity − 1) when in trade, 0 when flat
+        unrealised_pnl = (within_trade_equity - 1).fillna(0) * amount_per_entry
+
+        # Total unrealised across symbols at each timestamp
+        total_unrealised = unrealised_pnl.unstack(level="symbol").fillna(0).sum(axis=1)
+
+        # Realised P&L: capture unrealised on exit bars, shift +1 so it starts after exit
+        exit_pnl = unrealised_pnl.where(exit_mask).fillna(0)
+        realized_cumsum = (
+            exit_pnl.unstack(level="symbol").fillna(0).sum(axis=1)
+            .shift(1).fillna(0).cumsum()
+        )
+
+        n_universe = df.index.get_level_values("symbol").nunique()
+        initial_capital = amount_per_entry * n_universe
+        nav = initial_capital + total_unrealised + realized_cumsum
+        return (nav / initial_capital).rename(f"portfolio_equity_fixed_{method}")

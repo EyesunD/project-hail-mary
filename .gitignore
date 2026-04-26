@@ -29,6 +29,7 @@ htmlcov/
 
 # Data & cache
 data/cache/
+notebooks/examples/data/cache/
 data/raw/
 *.parquet
 *.feather

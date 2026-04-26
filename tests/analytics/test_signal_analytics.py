@@ -96,3 +96,42 @@ def test_portfolio_metrics_sharpe_is_finite(analytics: SignalAnalytics) -> None:
     sharpe = analytics.portfolio_metrics().sharpe
     assert isinstance(sharpe, float)
     assert sharpe == sharpe  # not NaN
+
+
+# ----------------------------------------------------------------- fixed amount
+
+
+def test_fixed_amount_equity_is_series(analytics: SignalAnalytics) -> None:
+    assert isinstance(analytics.portfolio_equity_fixed_amount(), pd.Series)
+
+
+def test_fixed_amount_equity_starts_at_one(analytics: SignalAnalytics) -> None:
+    eq = analytics.portfolio_equity_fixed_amount()
+    assert abs(float(eq.iloc[0]) - 1.0) < 1e-9
+
+
+def test_fixed_amount_equity_no_nan(analytics: SignalAnalytics) -> None:
+    eq = analytics.portfolio_equity_fixed_amount()
+    assert not eq.isna().any()
+
+
+def test_fixed_amount_conservative_lte_mtc(analytics: SignalAnalytics) -> None:
+    eq_mtc = analytics.portfolio_equity_fixed_amount(method="mtc")
+    eq_con = analytics.portfolio_equity_fixed_amount(method="conservative")
+    assert float(eq_con.iloc[-1]) <= float(eq_mtc.iloc[-1]) + 1e-9
+
+
+def test_fixed_amount_scale_linearity(analytics: SignalAnalytics) -> None:
+    eq_1k = analytics.portfolio_equity_fixed_amount(amount_per_entry=1_000.0)
+    eq_5k = analytics.portfolio_equity_fixed_amount(amount_per_entry=5_000.0)
+    pd.testing.assert_series_equal(eq_1k, eq_5k, check_names=False)
+
+
+def test_fixed_amount_returns_length(analytics: SignalAnalytics, bars_df: pd.DataFrame) -> None:
+    n_dates = bars_df.index.get_level_values("timestamp").nunique()
+    assert len(analytics.portfolio_returns_fixed_amount()) == n_dates
+
+
+def test_fixed_amount_metrics_is_performance_metrics(analytics: SignalAnalytics) -> None:
+    pm = analytics.portfolio_metrics_fixed_amount()
+    assert isinstance(pm, PerformanceMetrics)

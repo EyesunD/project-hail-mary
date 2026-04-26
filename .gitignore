@@ -53,3 +53,4 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+.claude/

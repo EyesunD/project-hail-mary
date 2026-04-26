@@ -23,7 +23,6 @@ dependencies = [
     "scipy>=1.13",
     "statsmodels>=0.14",
     "scikit-learn>=1.4",
-    "empyrical>=0.5",
     # Visualisation
     "plotly>=5.22",
     "kaleido>=0.2",       # static image export for plotly

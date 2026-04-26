@@ -1,7 +1,5 @@
-"""Multi-factor model framework."""
+"""Signal models."""
 
-from hailmary.models.factors.base import Factor, FactorScore
-from hailmary.models.multi_factor import MultiFactorModel
-from hailmary.models.portfolio import FactorPortfolio
+from hailmary.models.signals import TrendSignal
 
-__all__ = ["Factor", "FactorPortfolio", "FactorScore", "MultiFactorModel"]
+__all__ = ["TrendSignal"]

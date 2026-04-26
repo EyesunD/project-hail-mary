@@ -1,61 +1,107 @@
 # Project Hail Mary
 
-Quantitative backtesting and multi-factor analytics platform.
+Quantitative backtesting and analytics platform built around time-series signal strategies.
+Currently implements a moving-average trend signal on crypto assets, with the architecture
+designed to support multiple signals as the system grows.
 
 ## Features
 
 | Layer | What it does |
 |---|---|
 | **Data** | Abstract `DataProvider` with Yahoo Finance, Alpaca, Polygon, and CSV backends. Priority-based registry with automatic failover. Parquet disk cache. |
-| **Factors** | Composable `Factor` ABC — Momentum (12-1, residual), Value (B/M, E/P, composite), Quality (ROE, margins, gross profitability), Volatility (realised, beta, idiosyncratic). |
-| **Multi-factor model** | `MultiFactorModel` with equal, custom, or IC-weighted combination. IC analysis, signal decay curves. |
-| **Backtest** | `BacktestEngine` + `Strategy` ABC. Portfolio with position tracking, configurable slippage + commission models, full trade log. |
-| **Analytics** | `PerformanceMetrics` (Sharpe, Sortino, Calmar, VaR, CVaR, drawdown, capture). `RiskAnalytics` (Ledoit-Wolf / OAS covariance, risk contribution, factor variance decomposition). `FactorAnalytics` (IC, quintile returns, decay, turnover). |
-| **Visualisation** | Interactive Plotly charts with a dark house theme. Full performance tearsheet. Factor tearsheet (IC series, decay, quintile returns). Monthly return heatmap. |
+| **Signals** | `TrendSignal` — generates look-ahead-safe signal columns (`ma`, `signal_open`, `enter`, `exit`, `cycle`, `signal_age`) from OHLCV bar data. |
+| **Backtest** | Two paths: `BarBacktest` for fast per-symbol simulation; `BacktestEngine` + `TrendSignalStrategy` for full portfolio rebalancing with NAV and trade log. Fill-aware returns in both mark-to-close and conservative conventions. |
+| **Analytics** | `SignalAnalytics` for per-symbol and equal-weight portfolio stats. `PerformanceMetrics` (Sharpe, Sortino, Calmar, VaR, CVaR, drawdown). `RiskAnalytics` (covariance, risk contribution, factor decomposition). |
+| **Factor model** | `MovingAverageTrendFactor` + `MultiFactorModel` for cross-sectional scoring. `FactorPortfolio` (quantile / score-weighted / mean-variance optimised). |
+| **Visualisation** | Interactive Plotly charts with a dark house theme. Performance tearsheet, equity curves, drawdown, monthly return heatmap, factor charts. |
 | **CLI** | `hailmary fetch / clear-cache / info` |
 
-## Quick start
+## Install
 
 ```bash
 pip install -e ".[dev,notebooks]"
-cp .env.example .env        # fill in API keys if using Alpaca / Polygon
 jupyter lab notebooks/examples/
 ```
+
+Optional extras:
+
+```bash
+pip install -e ".[alpaca]"    # Alpaca Markets provider
+pip install -e ".[polygon]"   # Polygon.io provider
+pip install -e ".[dash]"      # Dash interactive dashboard
+```
+
+## Quick start — bar-level backtest
+
+```python
+import pandas as pd
+from hailmary.data.providers import YahooFinanceProvider
+from hailmary.models import TrendSignal
+from hailmary.backtest.signal_backtest import BarBacktest
+from hailmary.analytics.signal_analytics import SignalAnalytics
+
+signal = TrendSignal(ma_window=200)
+yahoo  = YahooFinanceProvider()
+
+start, end = pd.Timestamp("2022-01-01"), pd.Timestamp("2024-01-01")
+
+# Fetch warmup bars so MA-200 is fully computed from day one of the backtest
+fetch_start = start - pd.offsets.BDay(signal.warmup)
+bars = yahoo.get_bars(["BTC-USD", "ETH-USD", "SOL-USD"], start=fetch_start, end=end)
+
+signal_df = signal.run(bars, trim_start=start)
+bt_result = BarBacktest().run(signal_df)
+analytics = SignalAnalytics(bt_result)
+
+analytics.summary()                      # per-symbol returns, entries, % invested
+analytics.portfolio_equity().plot()      # equal-weight portfolio NAV
+analytics.portfolio_metrics().summary()  # Sharpe, max drawdown, CAGR, …
+```
+
+## Quick start — full portfolio engine
+
+```python
+from hailmary.backtest import BacktestEngine, TrendSignalStrategy
+from hailmary.viz.performance_charts import PerformanceCharts
+
+# signal_df and bars from above (with warmup fetch)
+close_df = bars["close"].unstack("symbol").loc[start:]
+
+engine = BacktestEngine(
+    prices=close_df,
+    strategy=TrendSignalStrategy(signal_df),
+    rebalance_frequency="D",
+)
+result = engine.run()
+PerformanceCharts(result).tearsheet().show()
+```
+
+## Notebooks
+
+| Notebook | What it covers |
+|---|---|
+| `01_data_providers.ipynb` | Fetching OHLCV data via `YahooFinanceProvider`, cache, multi-symbol |
+| `04_ma200_trend_signal.ipynb` | `TrendSignal` — signal columns, look-ahead safety, entry/exit visualisation |
+| `05_bar_backtest_analytics.ipynb` | `BarBacktest` + `SignalAnalytics` — returns, equity curves, drawdown, trade duration |
 
 ## Project structure
 
 ```
 src/hailmary/
-├── data/           # Market data abstraction layer
-├── models/         # Factor models & portfolio construction
-├── backtest/       # Backtesting engine
-├── analytics/      # Risk & performance analytics
-├── viz/            # Plotly visualisation suite
-└── cli/            # Command-line interface
+├── data/              # Market data abstraction (providers, cache, registry)
+├── models/            # TrendSignal, MovingAverageTrendFactor, MultiFactorModel, FactorPortfolio
+├── backtest/          # BarBacktest, TrendSignalStrategy, BacktestEngine, Portfolio, ExecutionModel
+├── analytics/         # SignalAnalytics, PerformanceMetrics, RiskAnalytics, FactorAnalytics
+├── viz/               # Plotly charts (dark theme, tearsheet, factor charts)
+└── cli/               # hailmary fetch / clear-cache / info
 
-tests/              # Pytest test suite
-notebooks/examples/ # Example Jupyter notebooks
-configs/            # Strategy configuration templates
-data/cache/         # Local data cache (git-ignored)
+tests/                 # pytest suite — no real network calls, synthetic fixtures
+notebooks/examples/    # End-to-end example notebooks
 ```
 
-## Example
+## Running tests
 
-```python
-from hailmary.data.providers import YahooFinanceProvider
-from hailmary.models.factors import MomentumFactor, VolatilityFactor
-from hailmary.models.multi_factor import MultiFactorModel
-from hailmary.backtest.engine import BacktestEngine
-from hailmary.viz.performance_charts import PerformanceCharts
-
-yahoo = YahooFinanceProvider()
-close = yahoo.get_bars(universe, "2019-01-01", "2024-01-01")["close"].unstack(0)
-
-model = MultiFactorModel([MomentumFactor(), VolatilityFactor()])
-engine = BacktestEngine(prices=close, strategy=my_strategy)
-result = engine.run()
-
-PerformanceCharts(result).tearsheet().show()
+```bash
+pytest                       # all tests with coverage
+pytest tests/backtest/ -v    # specific module
 ```
-
-See `notebooks/examples/` for end-to-end walkthroughs.

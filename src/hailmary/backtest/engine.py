@@ -5,6 +5,7 @@ from __future__ import annotations
 import abc
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from typing import Literal
 
 import pandas as pd
 from loguru import logger
@@ -120,7 +121,7 @@ class BacktestEngine:
     Usage::
 
         engine = BacktestEngine(
-            prices=close_df,
+            bars=bars,
             strategy=my_strategy,
             initial_capital=1_000_000,
         )
@@ -130,24 +131,27 @@ class BacktestEngine:
 
     def __init__(
         self,
-        prices: pd.DataFrame,
         strategy: Strategy,
         *,
+        bars: pd.DataFrame,
         initial_capital: float = 1_000_000.0,
-        rebalance_frequency: str = "ME",  # pandas offset alias
         execution: ExecutionModel | None = None,
         benchmark: pd.Series | None = None,
         risk_free_rate: float = 0.0,
+        fill_mode: Literal["mtc", "conservative"] = "mtc",
         **strategy_context: object,
     ) -> None:
-        self.prices = prices.sort_index()
+        self.prices = bars["close"].unstack("symbol").sort_index()
         self.strategy = strategy
         self.initial_capital = initial_capital
-        self.rebalance_frequency = rebalance_frequency
         self.execution = execution or ExecutionModel()
         self.benchmark = benchmark
         self.risk_free_rate = risk_free_rate
+        self.fill_mode = fill_mode
         self.strategy_context = strategy_context
+        self._open_df: pd.DataFrame | None = bars["open"].unstack("symbol") if fill_mode == "mtc" else None
+        self._high_df: pd.DataFrame | None = bars["high"].unstack("symbol") if fill_mode == "conservative" else None
+        self._low_df: pd.DataFrame | None = bars["low"].unstack("symbol") if fill_mode == "conservative" else None
 
     # ------------------------------------------------------------------ API
 
@@ -160,7 +164,6 @@ class BacktestEngine:
     ) -> BacktestResult:
         """Run the backtest over [start, end] and return a :class:`BacktestResult`."""
         prices = self._slice(start, end)
-        rebalance_dates = self._rebalance_dates(prices)
         portfolio = Portfolio(self.initial_capital)
 
         nav_records: list[tuple[pd.Timestamp, float]] = []
@@ -175,17 +178,20 @@ class BacktestEngine:
             task = progress.add_task("Running backtest...", total=len(prices))
             for ts, row in prices.iterrows():
                 current_prices = row.dropna()
-
-                if ts in rebalance_dates:
-                    hist = prices.loc[:ts]
-                    try:
-                        weights = self.strategy.generate_weights(
-                            hist, ts, portfolio, **self.strategy_context
-                        )
-                        portfolio.set_weights(weights, current_prices, ts, self.execution)
-                        weight_records.append((ts, weights))
-                    except Exception as exc:
-                        logger.warning("Strategy failed at {}: {}", ts, exc)
+                hist = prices.loc[:ts]
+                open_prices = self._open_df.loc[ts] if self._open_df is not None and ts in self._open_df.index else None
+                high_prices = self._high_df.loc[ts] if self._high_df is not None and ts in self._high_df.index else None
+                low_prices = self._low_df.loc[ts] if self._low_df is not None and ts in self._low_df.index else None
+                try:
+                    weights = self.strategy.generate_weights(
+                        hist, ts, portfolio, **self.strategy_context
+                    )
+                    portfolio.set_weights(weights, current_prices, ts, self.execution,
+                                          high_prices=high_prices, low_prices=low_prices,
+                                          open_prices=open_prices)
+                    weight_records.append((ts, weights))
+                except Exception as exc:
+                    logger.warning("Strategy failed at {}: {}", ts, exc)
 
                 nav = portfolio.snapshot(ts, current_prices)
                 nav_records.append((ts, nav))
@@ -207,7 +213,7 @@ class BacktestEngine:
             weights=weights_df,
             trade_log=portfolio.trade_log,
             benchmark_nav=benchmark_nav,
-            metadata={"risk_free_rate": self.risk_free_rate, "rebalance_frequency": self.rebalance_frequency},
+            metadata={"risk_free_rate": self.risk_free_rate, "fill_mode": self.fill_mode},
         )
 
     # ----------------------------------------------------------------- private
@@ -219,9 +225,6 @@ class BacktestEngine:
         if end:
             df = df.loc[:str(end)]
         return df
-
-    def _rebalance_dates(self, prices: pd.DataFrame) -> set[pd.Timestamp]:
-        return set(prices.resample(self.rebalance_frequency).last().index)
 
     def _normalise_benchmark(self, nav: pd.Series) -> pd.Series:
         bm = self.benchmark.reindex(nav.index, method="ffill")  # type: ignore[union-attr]

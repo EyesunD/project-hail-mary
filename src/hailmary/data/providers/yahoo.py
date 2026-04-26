@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 import yfinance as yf
@@ -52,6 +52,7 @@ class YahooFinanceProvider(DataProvider):
         adjust: bool = True,
     ) -> pd.DataFrame:
         yf_interval = _TF_MAP.get(timeframe, "1d")
+        fetch_end = self._inclusive_fetch_end(end)
         cache_key = DataCache.make_key(
             provider=self.name, symbols=sorted(symbols), start=str(start), end=str(end),
             interval=yf_interval, adjust=adjust,
@@ -60,12 +61,12 @@ class YahooFinanceProvider(DataProvider):
         if cached is not None:
             return cached
 
-        logger.info("Fetching {} symbols from Yahoo ({} → {})", len(symbols), start, end)
+        logger.info("Fetching {} symbols from Yahoo ({} → {}); inclusive", len(symbols), start, end)
         try:
             raw = yf.download(
                 symbols,
                 start=start,
-                end=end,
+                end=fetch_end,
                 interval=yf_interval,
                 auto_adjust=adjust,
                 progress=False,
@@ -76,6 +77,7 @@ class YahooFinanceProvider(DataProvider):
             raise ProviderUnavailableError(f"yfinance download failed: {exc}") from exc
 
         df = self._normalise(raw, symbols)
+        df = self._trim_to_end(df, end)
         if df.empty:
             raise SymbolNotFoundError(f"No data returned for {symbols}")
 
@@ -135,6 +137,23 @@ class YahooFinanceProvider(DataProvider):
         raise NotImplementedError(f"Universe '{index}' not supported by {self.name}.")
 
     # ----------------------------------------------------------------- private
+
+    @staticmethod
+    def _inclusive_fetch_end(end: date | datetime) -> date | datetime:
+        return end + timedelta(days=1)
+
+    @staticmethod
+    def _trim_to_end(df: pd.DataFrame, end: date | datetime) -> pd.DataFrame:
+        if df.empty:
+            return df
+
+        if isinstance(end, datetime):
+            cutoff = pd.Timestamp(end)
+        else:
+            cutoff = pd.Timestamp(end) + pd.Timedelta(days=1) - pd.Timedelta(nanoseconds=1)
+
+        timestamps = df.index.get_level_values("timestamp")
+        return df[timestamps <= cutoff]
 
     @staticmethod
     def _normalise(raw: pd.DataFrame, symbols: list[str]) -> pd.DataFrame:

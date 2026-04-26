@@ -26,8 +26,8 @@ def test_nav_reflects_market_value() -> None:
     t = Trade(datetime(2020, 1, 1), "AAPL", quantity=10, price=100.0)
     p.execute_trade(t)
     prices = pd.Series({"AAPL": 150.0})
-    # cash = 90_000, position = 10 * 150 = 1500 → nav = 91_500
-    assert p.nav(prices) == pytest.approx(91_500.0)
+    # cash = 99_000 (bought 10 @ 100), position = 10 * 150 = 1_500 → nav = 100_500
+    assert p.nav(prices) == pytest.approx(100_500.0)
 
 
 def test_set_weights_produces_trades(price_df: pd.DataFrame) -> None:

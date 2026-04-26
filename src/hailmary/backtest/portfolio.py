@@ -79,38 +79,62 @@ class Portfolio:
         prices: pd.Series,
         timestamp: datetime,
         execution_model: object | None = None,
+        high_prices: pd.Series | None = None,
+        low_prices: pd.Series | None = None,
+        open_prices: pd.Series | None = None,
     ) -> list[Trade]:
-        """Rebalance portfolio to target weights.  Returns list of Trades executed."""
+        """Rebalance portfolio to target weights.  Returns list of Trades executed.
+
+        Fill price priority: conservative high/low → open → close.
+        When *open_prices* is supplied, all entry and exit trades fill at the bar
+        open, matching the bar-level backtest convention (entry: open→close,
+        exit: prev-close→open).  When *high_prices*/*low_prices* are supplied
+        (conservative mode) they take precedence over open.
+        """
         nav = self.nav(prices)
         trades = []
         for sym, w in target_weights.items():
             target_value = w * nav
             current_value = self.positions.get(sym, Position(sym)).market_value(prices.get(sym, 0))
             delta_value = target_value - current_value
-            price = prices.get(sym)
-            if price is None or price <= 0:
+            close = prices.get(sym)
+            if close is None or close <= 0:
                 continue
-            quantity = delta_value / price
+            quantity = delta_value / close
             if abs(quantity) < 1e-6:
                 continue
+            if quantity > 0 and high_prices is not None:
+                fill_base = float(high_prices.get(sym, close))
+            elif quantity < 0 and low_prices is not None:
+                fill_base = float(low_prices.get(sym, close))
+            elif open_prices is not None:
+                fill_base = float(open_prices.get(sym, close))
+            else:
+                fill_base = close
             if execution_model is not None:
-                price = execution_model.fill_price(sym, price, quantity)
-                commission = execution_model.commission(quantity, price)
+                fill_base = execution_model.fill_price(sym, fill_base, quantity)
+                commission = execution_model.commission(quantity, fill_base)
             else:
                 commission = 0.0
             trade = Trade(timestamp=timestamp, symbol=sym, quantity=quantity,
-                          price=price, commission=commission)
+                          price=fill_base, commission=commission)
             self.execute_trade(trade)
             trades.append(trade)
         # Close positions not in target
         for sym in list(self.positions):
             if sym not in target_weights.index and not self.positions[sym].is_flat:
-                price = prices.get(sym, 0)
-                if price <= 0:
+                close = prices.get(sym, 0)
+                if close <= 0:
                     continue
                 qty = -self.positions[sym].quantity
+                if low_prices is not None:
+                    fill_base = float(low_prices.get(sym, close))
+                elif open_prices is not None:
+                    fill_base = float(open_prices.get(sym, close))
+                else:
+                    fill_base = close
                 trade = Trade(timestamp=timestamp, symbol=sym, quantity=qty,
-                              price=price, commission=0.0)
+                              price=fill_base, commission=0.0)
                 self.execute_trade(trade)
                 trades.append(trade)
         return trades

@@ -162,10 +162,11 @@ class DataProvider(abc.ABC):
         end: date | datetime,
         timeframe: Timeframe = Timeframe.DAY_1,
         *,
-        log: bool = False,
+            adjust: bool = False,
+            log: bool = False,
     ) -> pd.DataFrame:
         """Convenience: OHLCV → close-to-close returns wide DataFrame."""
-        bars = self.get_bars(symbols, start, end, timeframe)
+        bars = self.get_bars(symbols, start, end, timeframe,adjust=adjust)
         close = bars["close"].unstack(level=0)  # shape: (time, symbols)
         if log:
             import numpy as np

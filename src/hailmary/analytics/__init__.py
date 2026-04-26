@@ -1,7 +1,6 @@
-"""Analytics: risk, performance attribution, statistics."""
+"""Analytics: performance metrics and signal analytics."""
 
 from hailmary.analytics.metrics import PerformanceMetrics
-from hailmary.analytics.risk import RiskAnalytics
-from hailmary.analytics.statistics import FactorAnalytics
+from hailmary.analytics.signal_analytics import SignalAnalytics
 
-__all__ = ["FactorAnalytics", "PerformanceMetrics", "RiskAnalytics"]
+__all__ = ["PerformanceMetrics", "SignalAnalytics"]

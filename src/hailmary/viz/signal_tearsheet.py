@@ -34,7 +34,6 @@ from hailmary.analytics.signal_analytics import (
     QUALITY_FLAG_DOCS,
     TRADE_SUMMARY_DOCS,
     SignalTradePerformance,
-    docs_html_notes,
 )
 from hailmary.viz.theme import PALETTE, apply_theme
 
@@ -561,7 +560,11 @@ nav a:hover { color: #e6edf3; text-decoration: underline; }
 .table-wrap td, .t-tbl td { background: #0d1117; color: #e6edf3; }
 .t-tbl .win-row  td { background: rgba(63,185,80,0.07); }
 .t-tbl .loss-row td { background: rgba(248,81,73,0.07); }
-.note { font-size: 0.71rem; color: #8b949e; line-height: 1.8; padding-top: 6px; border-top: 1px solid #30363d; }
+th.hint, .tag-hint {
+    cursor: help;
+    text-decoration: underline dotted #58a6ff;
+    text-underline-offset: 3px;
+}
 .trade-group-hdr {
     font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
     letter-spacing: 0.08em; padding: 10px 0 5px;
@@ -611,14 +614,6 @@ function filterDist(sym, btn) {
     });
 }
 """
-
-_TABLE_NOTES = docs_html_notes(
-    TRADE_SUMMARY_DOCS,
-    D5_STATS_DOCS,
-    QUALITY_FLAG_DOCS,
-    FILL_METHOD_DOCS,
-)
-
 
 def _bg(val: float, bound: float) -> str:
     if pd.isna(val) or bound == 0:
@@ -849,17 +844,38 @@ class SignalTearsheet:
             )
         filter_html = f'<div class="f-bar">{"".join(method_btns)}{"".join(sym_btns)}</div>'
 
-        header_html = (
-            "<tr>"
-            "<th>Symbol</th><th>Fill</th><th>N</th>"
-            "<th>Win Rate</th><th>Avg Win</th><th>Avg Loss</th>"
-            "<th>Expectancy</th><th>Exp ex-Top</th><th>Median</th>"
-            "<th>PF</th><th>Skew</th>"
-            "<th>Avg DD</th><th>Worst DD</th>"
-            "<th>Dur</th><th>Flags</th>"
-            "<th>WR@5d</th><th>5d&rarr;Exit WR</th>"
-            "</tr>"
+        TS = TRADE_SUMMARY_DOCS
+        D5 = D5_STATS_DOCS
+        flags_tooltip = " | ".join(
+            f"{label}: {desc}" for label, desc in QUALITY_FLAG_DOCS.values()
         )
+        # (display_label, tooltip_or_None)
+        header_specs: list[tuple[str, str | None]] = [
+            ("Symbol",       None),
+            ("Fill",         None),  # tooltip is on the per-row fill tag itself
+            ("N",            TS["n_trades"][1]),
+            ("Win Rate",     TS["win_rate"][1]),
+            ("Avg Win",      TS["avg_win"][1]),
+            ("Avg Loss",     TS["avg_loss"][1]),
+            ("Expectancy",   TS["expectancy"][1]),
+            ("Exp ex-Top",   TS["expectancy_ex_top"][1]),
+            ("Median",       TS["median_return"][1]),
+            ("PF",           TS["profit_factor"][1]),
+            ("Skew",         TS["skewness"][1]),
+            ("Avg DD",       TS["avg_intra_drawdown"][1]),
+            ("Worst DD",     TS["max_intra_drawdown"][1]),
+            ("Dur",          TS["avg_duration"][1]),
+            ("Flags",        flags_tooltip),
+            ("WR@5d",        D5["wr_d5"][1]),
+            ("5d&rarr;Exit WR", D5["wr_tail"][1]),
+        ]
+
+        def _th(label: str, tip: str | None) -> str:
+            if tip is None:
+                return f"<th>{label}</th>"
+            return f'<th class="hint" title="{_html.escape(tip)}">{label}</th>'
+
+        header_html = "<tr>" + "".join(_th(lbl, tip) for lbl, tip in header_specs) + "</tr>"
 
         def _td(content: str, style: str = "") -> str:
             s = f' style="{style}"' if style else ""
@@ -871,9 +887,13 @@ class SignalTearsheet:
             sym        = r["symbol"]
             method_key = r["method"]
             method_lbl = _METHOD_LABEL.get(method_key, method_key)
+            fill_desc  = FILL_METHOD_DOCS.get(method_key, ("", ""))[1]
             bt         = "border-top:2px solid #444;" if sym != prev_sym else ""
             prev_sym   = sym
-            fill_tag   = f'<span class="section-tag tag-{method_key}">{method_lbl}</span>'
+            fill_tag   = (
+                f'<span class="section-tag tag-hint tag-{method_key}" '
+                f'title="{_html.escape(fill_desc)}">{method_lbl}</span>'
+            )
             pf_val     = r["profit_factor"]
             pf_fmt     = "&#x221e;" if pf_val == float("inf") else f"{pf_val:.2f}"
 
@@ -922,8 +942,7 @@ class SignalTearsheet:
             f'<tbody>{"".join(body_rows)}</tbody>'
             f'</table>'
         )
-        note_html = '<div class="note">' + "<br>".join(_TABLE_NOTES) + "</div>"
-        return f'{filter_html}<div class="table-wrap">{table_html}{note_html}</div>'
+        return f'{filter_html}<div class="table-wrap">{table_html}</div>'
 
     def _trade_log_html(self, trades_df: pd.DataFrame, symbols: list[str]) -> str:
         """Render :meth:`SignalTradePerformance.trade_stats` split into Win/Loss tables."""

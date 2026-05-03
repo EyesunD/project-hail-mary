@@ -118,15 +118,6 @@ def docs_markdown(docs: dict[str, ColumnDoc], title: str | None = None) -> str:
     return "\n".join(lines)
 
 
-def docs_html_notes(*docs: dict[str, ColumnDoc]) -> list[str]:
-    """Render one or more docs dicts as ``<b>label</b> — desc`` HTML strings."""
-    notes: list[str] = []
-    for d in docs:
-        for label, desc in d.values():
-            notes.append(f"<b>{label}</b> — {desc}")
-    return notes
-
-
 def _compound(x: pd.Series) -> float:
     return float((1 + x).prod() - 1)
 

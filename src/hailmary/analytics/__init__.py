@@ -9,7 +9,6 @@ from hailmary.analytics.signal_analytics import (
     TRADE_SUMMARY_DOCS,
     SignalAllocationPerformance,
     SignalTradePerformance,
-    docs_html_notes,
     docs_markdown,
 )
 from hailmary.analytics.signal_comparison import SignalComparison
@@ -24,6 +23,5 @@ __all__ = [
     "SignalTradePerformance",
     "TRADE_STATS_DOCS",
     "TRADE_SUMMARY_DOCS",
-    "docs_html_notes",
     "docs_markdown",
 ]

@@ -335,3 +335,178 @@ class SignalAnalytics:
         initial_capital = amount_per_entry * n_universe
         nav = initial_capital + total_unrealised + realized_cumsum
         return (nav / initial_capital).rename(f"portfolio_equity_{method}_fixed_stake")
+
+
+class TradeQuality:
+    """Per-trade path and timing analytics derived from a :class:`SignalAnalytics` instance.
+
+    Separates calculation logic (paths, timing stats, quality flags) from visualisation so
+    both the tearsheet and notebooks can consume the same numbers without re-implementing them.
+
+    Args:
+        analytics: A :class:`SignalAnalytics` instance.
+
+    Example::
+
+        tq    = TradeQuality(analytics)
+        paths = tq.trade_paths()
+
+        # Timing stats for one symbol
+        stats = TradeQuality.d5_stats("BTC-USD", "net", paths)
+        print(stats["wr_d5"], stats["capture_med"])
+
+        # Quality flags (booleans, render however you like)
+        flags = TradeQuality.quality_flags(expectancy=0.05, expectancy_ex_top=0.01,
+                                           median_return=0.02, skewness=0.3)
+    """
+
+    def __init__(self, analytics: SignalAnalytics) -> None:
+        self._a = analytics
+
+    def trade_paths(self) -> list[dict]:
+        """Build one dict per entry-to-exit cycle with cumulative return paths and timing fields.
+
+        Returns:
+            List of dicts, one per trade, each containing:
+
+            - ``label`` — e.g. "BTC-USD T3"
+            - ``sym`` — symbol string
+            - ``cum_net`` / ``cum_con`` — cumulative return Series starting at 0.0
+            - ``entry_dt`` / ``exit_dt`` — Timestamps
+            - ``duration`` — number of bars in the trade
+            - ``final_net`` / ``final_con`` — compound return over the full trade
+            - ``d5_net`` / ``d5_con`` — compound return at bar 5 (clamped to duration)
+            - ``d5_to_exit_net`` / ``d5_to_exit_con`` — geometric return from bar 5 to close
+            - ``max_dd_net`` / ``max_dd_con`` — worst peak-to-trough within the trade
+        """
+        df = self._a._data
+        trade_stats = self._a.trade_stats()
+        paths: list[dict] = []
+        sym_counters: dict[str, int] = {}
+
+        for (sym, _trade_id), group in df[df["cycle"] != "None"].groupby(
+            ["symbol", "trade_cycle_id"]
+        ):
+            sym_counters[sym] = sym_counters.get(sym, 0) + 1
+            label    = f"{sym} T{sym_counters[sym]}"
+            rets_net = group["return_net"].reset_index(drop=True)
+            rets_con = group["return_conservative"].reset_index(drop=True)
+            cum_net  = pd.concat([pd.Series([0.0]), (1 + rets_net).cumprod() - 1]).reset_index(drop=True)
+            cum_con  = pd.concat([pd.Series([0.0]), (1 + rets_con).cumprod() - 1]).reset_index(drop=True)
+            entry_dt = group.index.get_level_values("timestamp")[0]
+            exit_dt  = group.index.get_level_values("timestamp")[-1]
+            ts_row   = trade_stats[
+                (trade_stats["symbol"] == sym) & (trade_stats["entry_date"] == entry_dt)
+            ]
+            d5        = min(5, len(cum_net) - 1)
+            d5_net    = float(cum_net.iloc[d5])
+            d5_con    = float(cum_con.iloc[d5])
+            final_net = float(cum_net.iloc[-1])
+            final_con = float(cum_con.iloc[-1])
+            paths.append({
+                "label":          label,
+                "sym":            sym,
+                "cum_net":        cum_net,
+                "cum_con":        cum_con,
+                "entry_dt":       entry_dt,
+                "exit_dt":        exit_dt,
+                "duration":       len(rets_net),
+                "final_net":      final_net,
+                "final_con":      final_con,
+                "d5_net":         d5_net,
+                "d5_con":         d5_con,
+                "d5_to_exit_net": (1 + final_net) / (1 + d5_net) - 1,
+                "d5_to_exit_con": (1 + final_con) / (1 + d5_con) - 1,
+                "max_dd_net":     float(ts_row["max_intra_drawdown_net"].iloc[0])           if len(ts_row) else float("nan"),
+                "max_dd_con":     float(ts_row["max_intra_drawdown_conservative"].iloc[0])  if len(ts_row) else float("nan"),
+            })
+        return paths
+
+    @staticmethod
+    def d5_stats(sym: str, method: str, paths: list[dict]) -> dict:
+        """Timing statistics at the 5-bar mark for one symbol.
+
+        Args:
+            sym: Symbol to filter on.
+            method: ``"net"`` or ``"conservative"``.
+            paths: Output of :meth:`trade_paths`.
+
+        Returns:
+            Dict with keys ``wr_d5``, ``wr_d5_n``, ``wr_d5_nwin``,
+            ``wr_tail``, ``wr_tail_n``, ``wr_tail_nwin``, ``capture_med``.
+            Win-rate fields are ``nan`` when no qualifying trades exist.
+        """
+        sym_paths = [p for p in paths if p["sym"] == sym]
+        if not sym_paths:
+            return {
+                "wr_d5": float("nan"), "wr_d5_n": 0, "wr_d5_nwin": 0,
+                "wr_tail": float("nan"), "wr_tail_n": 0, "wr_tail_nwin": 0,
+                "capture_med": float("nan"),
+            }
+        d5_col   = "d5_net"         if method == "net" else "d5_con"
+        tail_col = "d5_to_exit_net" if method == "net" else "d5_to_exit_con"
+
+        # WR@5d: trades that actually reached bar 5
+        d5_paths   = [p for p in sym_paths if p["duration"] >= 5]
+        # 5d→Exit WR and capture: trades with a tail segment beyond bar 5
+        tail_paths = [p for p in sym_paths if p["duration"] > 5]
+
+        d5_vals   = [p[d5_col]   for p in d5_paths]
+        tail_vals = [p[tail_col] for p in tail_paths]
+
+        n_d5     = len(d5_vals)
+        n_win_d5 = sum(1 for v in d5_vals if v > 0)
+        n_tail   = len(tail_vals)
+        n_win_t  = sum(1 for v in tail_vals if v > 0)
+
+        return {
+            "wr_d5":        n_win_d5 / n_d5 if n_d5 > 0 else float("nan"),
+            "wr_d5_n":      n_d5,
+            "wr_d5_nwin":   n_win_d5,
+            "wr_tail":      n_win_t / n_tail if n_tail > 0 else float("nan"),
+            "wr_tail_n":    n_tail,
+            "wr_tail_nwin": n_win_t,
+        }
+
+    @staticmethod
+    def quality_flags(
+        expectancy: float,
+        expectancy_ex_top: float,
+        median_return: float,
+        skewness: float,
+        net_expectancy: float | None = None,
+        net_median: float | None = None,
+    ) -> dict[str, bool]:
+        """Signal-quality warning flags as a plain boolean mapping.
+
+        Args:
+            expectancy: Expected return per trade.
+            expectancy_ex_top: Expectancy after removing the best trade.
+            median_return: Median trade return.
+            skewness: Return distribution skewness.
+            net_expectancy: Net-fill expectancy (supply when computing conservative flags).
+            net_median: Net-fill median (supply when computing conservative flags).
+
+        Returns:
+            Dict mapping flag name → ``True`` if the condition is triggered:
+
+            - ``median_negative`` — expectancy > 0 but median < 0
+            - ``top_trade_outlier`` — expectancy > 0 and best trade accounts for > 30% of it
+            - ``skewed_right`` / ``skewed_left`` — |skewness| > 1.5
+            - ``edge_reversed`` — conservative expectancy ≤ 0 while net > 0
+            - ``fill_halves_edge`` — conservative < 50% of net expectancy
+            - ``median_flips`` — net median ≥ 0 but conservative median < 0
+        """
+        top_share = (
+            abs(expectancy - expectancy_ex_top) / abs(expectancy)
+            if expectancy > 0 else 0.0
+        )
+        return {
+            "median_negative":   expectancy > 0 and median_return < 0,
+            "top_trade_outlier": expectancy > 0 and top_share > 0.3,
+            "skewed_right":      skewness > 1.5,
+            "skewed_left":       skewness < -1.5,
+            "edge_reversed":     net_expectancy is not None and net_expectancy > 0 and expectancy <= 0,
+            "fill_halves_edge":  net_expectancy is not None and net_expectancy > 0 and 0 < expectancy < net_expectancy * 0.5,
+            "median_flips":      net_median is not None and net_median >= 0 and median_return < 0,
+        }

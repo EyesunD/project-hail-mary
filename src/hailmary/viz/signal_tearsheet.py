@@ -1,7 +1,25 @@
-"""Standalone HTML tearsheet for a single signal backtest."""
+"""Viz helpers and HTML tearsheet for signal-trade-quality output.
+
+Two layers live here:
+
+- **Pure-data viz helpers** — :func:`paths_fig`, :func:`timing_fig`,
+  :func:`distribution_fig`, :func:`format_quality_flags`.  They take the
+  precomputed analytics outputs (``paths`` list-of-dicts, ``trade_stats`` /
+  ``trade_summary`` DataFrames, ``quality_flags`` dict) and return ``go.Figure``
+  / ``str`` objects.  They have no knowledge of
+  :class:`~hailmary.analytics.SignalTradePerformance`.
+
+- **HTML wrapper** — :class:`SignalTearsheet` arranges the same helpers into
+  an interactive self-contained HTML file with sticky header, navigation, and
+  symbol/fill filters.
+
+Both notebooks and the HTML class call analytics first (via
+``SignalTradePerformance``) and pass the resulting data to the viz helpers.
+"""
 
 from __future__ import annotations
 
+import html as _html
 import webbrowser
 from pathlib import Path
 
@@ -10,7 +28,14 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from hailmary.analytics.signal_analytics import SignalTradePerformance
+from hailmary.analytics.signal_analytics import (
+    D5_STATS_DOCS,
+    FILL_METHOD_DOCS,
+    QUALITY_FLAG_DOCS,
+    TRADE_SUMMARY_DOCS,
+    SignalTradePerformance,
+    docs_html_notes,
+)
 from hailmary.viz.theme import PALETTE, apply_theme
 
 _P = PALETTE
@@ -30,6 +55,448 @@ _METHOD_LABEL: dict[str, str] = {
     "mtc":          "MTC",
     "conservative": "Conservative",
 }
+
+
+# ============================================================================
+# Pure-data viz helpers
+# ============================================================================
+
+
+def format_quality_flags(flags: dict[str, bool]) -> str:
+    """Render a :meth:`SignalTradePerformance.quality_flags` dict as a compact string.
+
+    Uses unicode glyphs (⚠, ↑, ↓, —) so the result is safe to drop into either
+    plain-text Jupyter output or HTML (the embedding HTML page should declare
+    UTF-8).  Returns ``"—"`` when no flags fire.
+    """
+    parts: list[str] = []
+    if flags["median_negative"]:
+        parts.append("⚠ median < 0")
+    if flags["top_trade_outlier"]:
+        parts.append("⚠ top trade >30%")
+    if flags["skewed_right"]:
+        parts.append("↑ skewed right")
+    elif flags["skewed_left"]:
+        parts.append("↓ skewed left")
+    if flags["edge_reversed"]:
+        parts.append("⚠ edge reversed vs net")
+    elif flags["fill_halves_edge"]:
+        parts.append("⚠ fill halves edge")
+    if flags["median_flips"]:
+        parts.append("⚠ median flips negative")
+    return ", ".join(parts) if parts else "—"
+
+
+def paths_fig(
+    paths: list[dict],
+    method: str = "net",
+    title: str | None = None,
+) -> go.Figure:
+    """Aligned trade paths chart — per-trade lines coloured by win/loss, with mean/median/±1σ overlays.
+
+    Day 0 is the entry bar; each line shows cumulative return from entry through
+    the trade's life.  An inline button menu filters by symbol; the ``Day 5``
+    vertical marker matches the cut-off used by :meth:`SignalTradePerformance.d5_stats`.
+
+    Args:
+        paths: Output of :meth:`SignalTradePerformance.trade_paths`.
+        method: ``"net"`` (default) or ``"conservative"`` — picks ``cum_net`` /
+            ``cum_con`` from each path dict.
+        title: Optional override; defaults to ``"Aligned Trade Paths — {Method} Fill"``.
+
+    Returns:
+        :class:`plotly.graph_objects.Figure` with the house theme applied.
+    """
+    cum_key = "cum_net" if method == "net" else "cum_con"
+    avg_colour = _P["accent_yellow"] if method == "net" else _P["accent_orange"]
+    band_rgba = "rgba(255,215,0,0.10)" if method == "net" else "rgba(255,140,0,0.10)"
+    if title is None:
+        title = f"Aligned Trade Paths — {_METHOD_LABEL.get(method, method)} Fill"
+
+    fig = go.Figure()
+    symbols = sorted({t["sym"] for t in paths})
+    trace_meta: list[tuple[str, str]] = []
+    shown_labels: set[str] = set()
+
+    for t in paths:
+        cum    = t[cum_key]
+        win    = float(cum.iloc[-1]) > 0
+        colour = _P["accent_green"] if win else _P["accent_red"]
+        label  = "Win" if win else "Loss"
+        show   = label not in shown_labels
+        if show:
+            shown_labels.add(label)
+        n      = len(cum)
+        custom = [[
+            t["label"], str(t["entry_dt"].date()), str(t["exit_dt"].date()),
+            t["duration"],
+            f"{t['final_net']:+.1%}", f"{t['final_con']:+.1%}",
+            f"{t['max_dd_net']:.1%}", f"{t['max_dd_con']:.1%}",
+        ]] * n
+        fig.add_trace(go.Scatter(
+            x=list(range(n)), y=(cum * 100).tolist(),
+            mode="lines", line=dict(color=colour, width=1.5), opacity=0.55,
+            name=label, legendgroup=label, showlegend=show,
+            customdata=custom,
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>"
+                "Entry: %{customdata[1]} &rarr; Exit: %{customdata[2]}<br>"
+                "Duration: %{customdata[3]} bars | Day %{x}: <b>%{y:.1f}%</b><br>"
+                "Final — net: %{customdata[4]}  |  conservative: %{customdata[5]}<br>"
+                "Max DD — net: %{customdata[6]}  |  conservative: %{customdata[7]}"
+                "<extra></extra>"
+            ),
+        ))
+        trace_meta.append((t["sym"], "trade"))
+
+    def _add_agg(subset: list[dict], group_key: str, visible: bool, show_legend: bool) -> None:
+        max_dur = max(len(t[cum_key]) for t in subset)
+        avgs, meds, stds = [], [], []
+        for d in range(max_dur):
+            vals = [float(t[cum_key].iloc[d]) * 100 for t in subset if d < len(t[cum_key])]
+            avgs.append(float(np.mean(vals)))
+            meds.append(float(np.median(vals)))
+            stds.append(float(np.std(vals)))
+        days  = list(range(max_dur))
+        upper = [a + s for a, s in zip(avgs, stds)]
+        lower = [a - s for a, s in zip(avgs, stds)]
+        fig.add_trace(go.Scatter(
+            x=days + days[::-1], y=upper + lower[::-1],
+            fill="toself", fillcolor=band_rgba,
+            line=dict(color="rgba(0,0,0,0)"),
+            name="±1σ", showlegend=False, hoverinfo="skip", visible=visible,
+        ))
+        fig.add_trace(go.Scatter(
+            x=days, y=avgs, mode="lines",
+            line=dict(color=avg_colour, width=2.5),
+            name="Mean", showlegend=show_legend, visible=visible,
+            hovertemplate="Day %{x} | Mean: <b>%{y:.1f}%</b><extra></extra>",
+        ))
+        fig.add_trace(go.Scatter(
+            x=days, y=meds, mode="lines",
+            line=dict(color=_P["accent_purple"], width=2, dash="dash"),
+            name="Median", showlegend=show_legend, visible=visible,
+            hovertemplate="Day %{x} | Median: <b>%{y:.1f}%</b><extra></extra>",
+        ))
+        trace_meta.extend([(group_key, "agg")] * 3)
+
+    _add_agg(paths, "__all__", visible=True, show_legend=True)
+    for sym in symbols:
+        sym_paths = [p for p in paths if p["sym"] == sym]
+        if sym_paths:
+            _add_agg(sym_paths, sym, visible=False, show_legend=False)
+
+    all_options: list[tuple[str, str | None]] = [("All", None)] + [(s, s) for s in symbols]
+    buttons = []
+    for btn_label, filter_sym in all_options:
+        vis: list[bool] = []
+        for sym, ttype in trace_meta:
+            if filter_sym is None:
+                vis.append(ttype == "trade" or sym == "__all__")
+            else:
+                vis.append(sym == filter_sym)
+        buttons.append(dict(label=btn_label, method="update", args=[{"visible": vis}]))
+
+    fig.update_layout(
+        updatemenus=[dict(
+            type="buttons", direction="right", buttons=buttons,
+            showactive=True,
+            x=0.0, xanchor="left", y=1.13, yanchor="top",
+            font=dict(size=11), bgcolor="#161b22", bordercolor="#30363d", active=0,
+        )]
+    )
+
+    fig.add_vline(
+        x=5,
+        line=dict(color=_P["text_secondary"], width=1.2, dash="dot"),
+        annotation_text="Day 5",
+        annotation_position="top right",
+        annotation_font=dict(size=10, color=_P["text_secondary"]),
+    )
+    fig.add_hline(y=0, line=dict(color=_P["text_secondary"], width=0.8, dash="dash"))
+    apply_theme(fig, title=title, height=480)
+    fig.update_layout(
+        margin=dict(t=70),
+        xaxis_title="Bars since entry",
+        yaxis_title="Cumulative return from entry (%)",
+    )
+    return fig
+
+
+def timing_fig(
+    paths: list[dict],
+    method: str = "net",
+    sym_subset: list[str] | None = None,
+) -> go.Figure:
+    """Horizontal stacked bar: first-5-bars return + 5d→exit return per individual trade.
+
+    Args:
+        paths: Output of :meth:`SignalTradePerformance.trade_paths`.
+        method: ``"net"`` (default) or ``"conservative"``.
+        sym_subset: Optional list of symbols to include.  ``None`` (default)
+            includes every trade.
+    """
+    d5_col   = "d5_net"         if method == "net" else "d5_con"
+    tail_col = "d5_to_exit_net" if method == "net" else "d5_to_exit_con"
+    label    = _METHOD_LABEL.get(method, method)
+
+    subset = sorted(
+        [p for p in paths if sym_subset is None or p["sym"] in sym_subset],
+        key=lambda p: (p["sym"], p["label"]),
+    )
+    labels    = [p["label"]    for p in subset]
+    d5_vals   = [p[d5_col]     for p in subset]
+    tail_vals = [p[tail_col]   for p in subset]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        orientation="h", y=labels, x=d5_vals,
+        name="First 5 bars",
+        marker_color=_P["accent_blue"], opacity=0.85,
+        hovertemplate="%{y}<br>First 5 bars: <b>%{x:.1%}</b><extra></extra>",
+    ))
+    fig.add_trace(go.Bar(
+        orientation="h", y=labels, x=tail_vals,
+        name="5d → Exit",
+        marker_color=_P["accent_orange"], opacity=0.85,
+        hovertemplate="%{y}<br>5d → Exit: <b>%{x:.1%}</b><extra></extra>",
+    ))
+
+    fig.add_vline(x=0, line=dict(color=_P["text_secondary"], width=0.8, dash="dash"))
+    height = max(300, 32 * len(subset) + 80)
+    fig.update_layout(barmode="relative")
+    apply_theme(fig, title=f"Entry Timing — {label} Fill", height=height)
+    fig.update_layout(
+        margin=dict(t=30),
+        xaxis=dict(tickformat=".0%", title_text="Return"),
+        yaxis=dict(autorange="reversed"),
+        legend=dict(orientation="h", y=1.08, x=0),
+    )
+    return fig
+
+
+def quality_table_styler(qt: pd.DataFrame) -> "pd.io.formats.style.Styler":
+    """Render a :meth:`SignalTradePerformance.quality_table` frame as a coloured pandas Styler.
+
+    Formats percentages, replaces the raw ``flags`` dict with text via
+    :func:`format_quality_flags`, and folds the ``wr_d5`` / ``wr_tail`` triples
+    into single ``n_win/n (rate%)`` strings.  Applies diverging red→green
+    backgrounds to win-rate / expectancy / median / profit-factor and a
+    descending-red background to drawdown columns.
+
+    Args:
+        qt: DataFrame from :meth:`SignalTradePerformance.quality_table`.
+
+    Returns:
+        :class:`pandas.io.formats.style.Styler` ready for ``display(...)``.
+    """
+    df = qt.copy()
+    df["flags"] = df["flags"].apply(format_quality_flags)
+    df["wr_d5"] = df.apply(
+        lambda r: f"{int(r['wr_d5_nwin'])}/{int(r['wr_d5_n'])} ({r['wr_d5']:.0%})"
+                  if pd.notna(r["wr_d5"]) else "—",
+        axis=1,
+    )
+    df["wr_tail"] = df.apply(
+        lambda r: f"{int(r['wr_tail_nwin'])}/{int(r['wr_tail_n'])} ({r['wr_tail']:.0%})"
+                  if pd.notna(r["wr_tail"]) else "no >5d trades",
+        axis=1,
+    )
+    df = df.drop(columns=[
+        "wr_d5_n", "wr_d5_nwin", "wr_tail_n", "wr_tail_nwin",
+        "max_win", "max_loss",
+    ])
+    df = df[[
+        "n_trades", "win_rate", "avg_win", "avg_loss",
+        "expectancy", "expectancy_ex_top", "median_return", "profit_factor", "skewness",
+        "avg_intra_drawdown", "max_intra_drawdown",
+        "avg_duration", "flags", "wr_d5", "wr_tail",
+    ]]
+
+    exp_bound = max(
+        float(df[["expectancy", "expectancy_ex_top", "median_return"]].abs().max().max()),
+        0.001,
+    )
+    dd_bound = max(float(df["max_intra_drawdown"].abs().max()), 0.001)
+
+    pct  = "{:+.1%}"
+    pct0 = "{:.1%}"
+    fmt = {
+        "n_trades":            "{:.0f}",
+        "win_rate":            pct0,
+        "avg_win":             pct,
+        "avg_loss":            pct,
+        "expectancy":          pct,
+        "expectancy_ex_top":   pct,
+        "median_return":       pct,
+        "profit_factor":       "{:.2f}",
+        "skewness":            "{:+.2f}",
+        "avg_intra_drawdown":  pct0,
+        "max_intra_drawdown":  pct0,
+        "avg_duration":        "{:.0f}",
+    }
+
+    styler = df.style.format(fmt)
+    for col in ["expectancy", "expectancy_ex_top", "median_return"]:
+        styler = styler.map(lambda v, b=exp_bound: _bg(v, b), subset=[col])
+    styler = styler.map(
+        lambda v: _bg(float(v) - 0.5, 0.5) if pd.notna(v) else "",
+        subset=["win_rate"],
+    )
+    styler = styler.map(
+        lambda v: _bg(min(float(v), 3.0) - 1.0, 2.0)
+                  if pd.notna(v) and v != float("inf") else "",
+        subset=["profit_factor"],
+    )
+    for col in ["avg_intra_drawdown", "max_intra_drawdown"]:
+        styler = styler.map(lambda v, b=dd_bound: _bg_red(v, b), subset=[col])
+    return styler
+
+
+def trade_log_styler(trades_df: pd.DataFrame) -> "pd.io.formats.style.Styler":
+    """Render a :meth:`SignalTradePerformance.trade_stats` frame as a coloured pandas Styler.
+
+    Green/red colouring on the six return columns (positive/negative); a
+    red gradient on the two drawdown columns scaled to a 20% reference.
+
+    Args:
+        trades_df: DataFrame from :meth:`SignalTradePerformance.trade_stats`.
+
+    Returns:
+        :class:`pandas.io.formats.style.Styler` ready for ``display(...)``.
+    """
+    df = trades_df.rename(columns={
+        "symbol":                          "sym",
+        "return_net":                      "final_net",
+        "return_conservative":             "final_con",
+        "d5_conservative":                 "d5_con",
+        "d5_to_exit_conservative":         "d5_to_exit_con",
+        "max_intra_drawdown_net":          "max_dd_net",
+        "max_intra_drawdown_conservative": "max_dd_con",
+    })[[
+        "label", "sym", "entry_date", "exit_date", "duration",
+        "d5_net", "d5_con", "d5_to_exit_net", "d5_to_exit_con",
+        "final_net", "final_con", "max_dd_net", "max_dd_con",
+    ]].copy()
+    df["entry_date"] = pd.to_datetime(df["entry_date"]).dt.date
+    df["exit_date"]  = pd.to_datetime(df["exit_date"]).dt.date
+
+    fmt = {
+        "duration":       "{:.0f}",
+        "d5_net":         "{:+.1%}",
+        "d5_con":         "{:+.1%}",
+        "d5_to_exit_net": "{:+.1%}",
+        "d5_to_exit_con": "{:+.1%}",
+        "final_net":      "{:+.1%}",
+        "final_con":      "{:+.1%}",
+        "max_dd_net":     "{:.1%}",
+        "max_dd_con":     "{:.1%}",
+    }
+
+    def _ret_colour(v: float) -> str:
+        if pd.isna(v):
+            return ""
+        if v > 0:
+            return "color: #3fb950; font-weight: 600;"
+        if v < 0:
+            return "color: #f85149; font-weight: 600;"
+        return ""
+
+    def _dd_bg(v: float) -> str:
+        if pd.isna(v):
+            return ""
+        t = min(1.0, abs(float(v)) / 0.20)
+        r = round(248 * t + 80 * (1 - t))
+        g = b = round(20 * (1 - t) + 5)
+        return f"background-color: rgb({r},{g},{b}); color: #111;"
+
+    styler = df.style.format(fmt)
+    for col in ["d5_net", "d5_con", "d5_to_exit_net", "d5_to_exit_con",
+                "final_net", "final_con"]:
+        styler = styler.map(_ret_colour, subset=[col])
+    for col in ["max_dd_net", "max_dd_con"]:
+        styler = styler.map(_dd_bg, subset=[col])
+    return styler
+
+
+def distribution_fig(
+    trades_df: pd.DataFrame,
+    ts_net: pd.DataFrame,
+    ts_con: pd.DataFrame,
+    method: str = "net",
+    symbols: list[str] | None = None,
+) -> go.Figure:
+    """Per-symbol return histogram with expectancy / median vlines.
+
+    Args:
+        trades_df: Output of :meth:`SignalTradePerformance.trade_stats`.
+        ts_net: ``trade_summary("net")`` — provides the net expectancy/median vlines.
+        ts_con: ``trade_summary("conservative")`` — used when ``method="conservative"``.
+        method: ``"net"`` (default) or ``"conservative"``.
+        symbols: Optional list of symbols to include; defaults to all symbols
+            present in ``trades_df``.
+    """
+    all_syms = sorted(trades_df["symbol"].unique())
+    syms     = symbols if symbols is not None else all_syms
+    n_sym    = len(syms)
+
+    ret_col = "return_conservative" if method == "conservative" else "return_net"
+    ts      = ts_con if method == "conservative" else ts_net
+    colour  = _METHOD_COLOUR.get(method, _P["accent_yellow"])
+    label   = _METHOD_LABEL.get(method, method)
+
+    fig = make_subplots(
+        rows=1, cols=n_sym, subplot_titles=syms,
+        shared_yaxes=True, horizontal_spacing=0.06,
+    )
+
+    for leg_colour, dash, leg_label in [
+        (colour,              "solid", f"Expectancy ({label})"),
+        (_P["accent_purple"], "dash",  f"Median ({label})"),
+    ]:
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None], mode="lines",
+            line=dict(color=leg_colour, width=2, dash=dash), name=leg_label,
+        ))
+
+    shown: set[str] = set()
+    for col_i, sym in enumerate(syms, start=1):
+        ret = trades_df[trades_df["symbol"] == sym][ret_col]
+        for data, bar_colour, bar_label in [
+            (ret[ret <= 0], _P["accent_red"],   "Loss"),
+            (ret[ret >  0], _P["accent_green"], "Win"),
+        ]:
+            show = bar_label not in shown
+            if show:
+                shown.add(bar_label)
+            fig.add_trace(go.Histogram(
+                x=data, name=bar_label, legendgroup=bar_label, showlegend=show,
+                marker_color=bar_colour, opacity=0.8, nbinsx=8,
+            ), row=1, col=col_i)
+
+        fig.add_vline(x=0,
+                      line_dash="dash", line_color=_P["text_secondary"], line_width=1,
+                      row=1, col=col_i)
+        fig.add_vline(x=float(ts.loc[sym, "expectancy"]),
+                      line_dash="solid", line_color=colour, line_width=2,
+                      row=1, col=col_i)
+        fig.add_vline(x=float(ts.loc[sym, "median_return"]),
+                      line_dash="dash", line_color=_P["accent_purple"], line_width=2,
+                      row=1, col=col_i)
+
+    fig.update_layout(barmode="overlay")
+    for i in range(1, n_sym + 1):
+        axis = f"xaxis{'' if i == 1 else i}"
+        fig.update_layout(**{axis: dict(tickformat=".0%", title_text="Return per trade")})
+    fig.update_layout(yaxis_title="# Trades")
+    apply_theme(fig, title=f"Return Distribution — {label} Fill", height=400)
+    return fig
+
+
+# ============================================================================
+# HTML tearsheet
+# ============================================================================
+
 
 _CSS = """
 *, *::before, *::after { box-sizing: border-box; }
@@ -145,18 +612,12 @@ function filterDist(sym, btn) {
 }
 """
 
-_TABLE_NOTES = [
-    "<b>Win Rate</b> — fraction of trades that closed with a positive return.",
-    "<b>Expectancy</b> — win_rate &times; avg_win + (1 &minus; win_rate) &times; avg_loss; expected return per bet.",
-    "<b>Exp ex-Top</b> — expectancy after removing the single best trade. Large gap = outlier-driven edge.",
-    "<b>Median</b> — 50th-percentile return; Median &laquo; Expectancy = right-skewed distribution.",
-    "<b>Profit Factor</b> — &Sigma; wins / |&Sigma; losses|; &gt; 1 earns more than it loses.",
-    "<b>Skewness</b> — &gt; +1: rare large wins; &lt; &minus;1: rare large losses.",
-    "<b>Avg DD / Worst DD</b> — intra-trade peak-to-trough from entry price. Always &le; 0.",
-    "<b>WR@5d</b> — win rate at bar 5 (trades &ge;5 bars only, i.e. reached bar 5); <b>5d&rarr;Exit WR</b> — win rate from bar 5 to close (trades &gt;5 bars only).",
-    "<b>Conservative fill flags</b>: <i>edge reversed vs net</i> — conservative expectancy &le; 0 while net &gt; 0; <i>fill halves edge</i> — conservative &lt; 50% of net expectancy; <i>median flips negative</i> — net median &ge; 0 but conservative &lt; 0.",
-    "<b>Net</b> = MTC fill minus round-trip cost.  <b>Conservative</b> = high entry / low exit fill.",
-]
+_TABLE_NOTES = docs_html_notes(
+    TRADE_SUMMARY_DOCS,
+    D5_STATS_DOCS,
+    QUALITY_FLAG_DOCS,
+    FILL_METHOD_DOCS,
+)
 
 
 def _bg(val: float, bound: float) -> str:
@@ -225,9 +686,12 @@ class SignalTearsheet:
         def _chart(fig: go.Figure) -> str:
             return fig.to_html(full_html=False, include_plotlyjs=False)
 
-        paths  = self._a.trade_paths()
-        ts_net = self._a.trade_summary(method="net")
-        ts_con = self._a.trade_summary(method="conservative")
+        # ---- analytics: pre-compute everything the page needs ----
+        trades_df = self._a.trade_stats()
+        paths     = self._a.trade_paths(trade_stats=trades_df)
+        ts_net    = self._a.trade_summary(method="net",          trade_stats=trades_df)
+        ts_con    = self._a.trade_summary(method="conservative", trade_stats=trades_df)
+        qt        = self._a.quality_table(methods=("net", "conservative"), trade_stats=trades_df)
 
         data    = self._a._data
         symbols = sorted(data.index.get_level_values("symbol").unique())
@@ -265,10 +729,9 @@ class SignalTearsheet:
             '</div>'
         )
 
-        # ---- helpers for symbol-filter bars ----
         def _sym_filter_bar(btn_cls: str, onclick_fn: str) -> str:
             btns = [
-                f'<span class="toggle-lbl">Symbol:</span>',
+                '<span class="toggle-lbl">Symbol:</span>',
                 f'<button class="qf-btn {btn_cls} active" onclick="{onclick_fn}(\'all\', this)">All</button>',
             ]
             for sym in symbols:
@@ -280,14 +743,11 @@ class SignalTearsheet:
         # ---- trade paths: method divs, symbol filter inside figure ----
         path_sections: list[str] = []
         for m in self._methods:
-            cum_key    = "cum_net" if m == "net" else "cum_con"
-            avg_colour = _P["accent_yellow"] if m == "net" else _P["accent_orange"]
-            band       = "rgba(255,215,0,0.10)" if m == "net" else "rgba(255,140,0,0.10)"
             lbl = _METHOD_LABEL.get(m, m)
             tag = f'<div class="section-tag-block"><span class="section-tag tag-{m}">{lbl}</span></div>'
             path_sections.append(
                 f'<div data-method="{m}">{tag}'
-                f'{_chart(self._paths_fig(paths, cum_key, f"Aligned Trade Paths — {lbl} Fill", avg_colour, band))}'
+                f'{_chart(paths_fig(paths, method=m))}'
                 f'</div>'
             )
 
@@ -300,7 +760,7 @@ class SignalTearsheet:
                 tag = f'<div class="section-tag-block"><span class="section-tag tag-{m}">{lbl}</span></div>'
                 method_charts.append(
                     f'<div data-method="{m}">{tag}'
-                    f'{_chart(self._timing_fig(paths, m, None if sym_list is None else sym_list))}'
+                    f'{_chart(timing_fig(paths, method=m, sym_subset=sym_list))}'
                     f'</div>'
                 )
             hidden = '' if sym_filter == 'all' else ' style="display:none"'
@@ -317,7 +777,7 @@ class SignalTearsheet:
                 tag = f'<div class="section-tag-block"><span class="section-tag tag-{m}">{lbl}</span></div>'
                 method_charts.append(
                     f'<div data-method="{m}">{tag}'
-                    f'{_chart(self._distribution_fig(m, ts_net, ts_con, sym_list))}'
+                    f'{_chart(distribution_fig(trades_df, ts_net, ts_con, method=m, symbols=sym_list))}'
                     f'</div>'
                 )
             hidden = '' if sym_filter == 'all' else ' style="display:none"'
@@ -328,14 +788,14 @@ class SignalTearsheet:
         main = "\n".join([
             '<div class="main-content">',
             '<section id="quality"><h2>Per-Trade Quality</h2>',
-            self._quality_table_html(ts_net, ts_con, paths),
+            self._quality_table_html(qt, symbols),
             '</section>',
             '<section id="timing"><h2>Entry Timing</h2>',
             _sym_filter_bar("timing-sym", "filterTiming"),
             "\n".join(timing_sym_divs),
             '</section>',
             '<section id="tradelog"><h2>Trade Log</h2>',
-            self._trade_log_html(paths, symbols),
+            self._trade_log_html(trades_df, symbols),
             '</section>',
             '<section id="paths"><h2>Aligned Trade Paths</h2>',
             "\n".join(path_sections),
@@ -359,39 +819,11 @@ class SignalTearsheet:
             f'</body>\n</html>'
         )
 
-    # ----------------------------------------------------------------- sections
+    # ----------------------------------------------------------------- HTML sections
 
-    def _quality_table_html(
-        self, ts_net: pd.DataFrame, ts_con: pd.DataFrame, paths: list[dict]
-    ) -> str:
-        _METRICS = [
-            "win_rate", "avg_win", "avg_loss", "expectancy", "expectancy_ex_top",
-            "median_return", "profit_factor", "skewness", "avg_intra_drawdown",
-            "max_intra_drawdown",
-        ]
-        symbols = sorted(ts_net.index.tolist())
-
-        rows: list[dict] = []
-        for sym in symbols:
-            for method_key, ts in [("net", ts_net), ("conservative", ts_con)]:
-                r: dict = {
-                    "symbol":     sym,
-                    "method_key": method_key,
-                    "method_lbl": _METHOD_LABEL.get(method_key, method_key),
-                    "n_trades":   int(ts.loc[sym, "n_trades"]),
-                    "avg_duration": float(ts.loc[sym, "avg_duration"]),
-                }
-                for m in _METRICS:
-                    r[m] = float(ts.loc[sym, m])
-                flags = SignalTradePerformance.quality_flags(
-                    r["expectancy"], r["expectancy_ex_top"],
-                    r["median_return"], r["skewness"],
-                    net_expectancy=float(ts_net.loc[sym, "expectancy"]) if method_key == "conservative" else None,
-                    net_median=float(ts_net.loc[sym, "median_return"]) if method_key == "conservative" else None,
-                )
-                r["flags"] = self._outlier_flag_html(flags)
-                r.update(SignalTradePerformance.d5_stats(sym, method_key, paths))
-                rows.append(r)
+    def _quality_table_html(self, qt: pd.DataFrame, symbols: list[str]) -> str:
+        """Render :meth:`SignalTradePerformance.quality_table` as a filterable HTML table."""
+        rows = qt.reset_index().to_dict(orient="records")
 
         exp_bound = max(
             max(abs(r["expectancy"])        for r in rows),
@@ -437,10 +869,11 @@ class SignalTearsheet:
         prev_sym = None
         for r in rows:
             sym        = r["symbol"]
-            method_key = r["method_key"]
+            method_key = r["method"]
+            method_lbl = _METHOD_LABEL.get(method_key, method_key)
             bt         = "border-top:2px solid #444;" if sym != prev_sym else ""
             prev_sym   = sym
-            fill_tag   = f'<span class="section-tag tag-{method_key}">{r["method_lbl"]}</span>'
+            fill_tag   = f'<span class="section-tag tag-{method_key}">{method_lbl}</span>'
             pf_val     = r["profit_factor"]
             pf_fmt     = "&#x221e;" if pf_val == float("inf") else f"{pf_val:.2f}"
 
@@ -457,11 +890,13 @@ class SignalTearsheet:
                 f'<span class="muted">no trades &gt;5d</span>'
             )
 
+            flags_html = _html.escape(format_quality_flags(r["flags"]))
+
             sep = "border-left:2px solid #555;"
             cells = "".join([
                 _td(sym,                               bt),
                 _td(fill_tag,                          bt),
-                _td(str(r["n_trades"]),                bt),
+                _td(str(int(r["n_trades"])),           bt),
                 _td(f'{r["win_rate"]:.1%}',            _bg(r["win_rate"] - 0.5, 0.5)                            + bt),
                 _td(f'{r["avg_win"]:+.1%}',            bt),
                 _td(f'{r["avg_loss"]:+.1%}',           bt),
@@ -473,7 +908,7 @@ class SignalTearsheet:
                 _td(f'{r["avg_intra_drawdown"]:.1%}',  _bg_red(r["avg_intra_drawdown"], dd_bound)               + bt),
                 _td(f'{r["max_intra_drawdown"]:.1%}',  _bg_red(r["max_intra_drawdown"], dd_bound)               + bt),
                 _td(f'{r["avg_duration"]:.0f}',        bt),
-                _td(r["flags"],                        bt),
+                _td(flags_html,                        bt),
                 _td(wr_d5_fmt,                         sep + bt),
                 _td(wr_tail_fmt,                       bt),
             ])
@@ -490,9 +925,19 @@ class SignalTearsheet:
         note_html = '<div class="note">' + "<br>".join(_TABLE_NOTES) + "</div>"
         return f'{filter_html}<div class="table-wrap">{table_html}{note_html}</div>'
 
-    def _trade_log_html(self, paths: list[dict], symbols: list[str]) -> str:
-        wins   = [t for t in paths if t["final_net"] > 0]
-        losses = [t for t in paths if t["final_net"] <= 0]
+    def _trade_log_html(self, trades_df: pd.DataFrame, symbols: list[str]) -> str:
+        """Render :meth:`SignalTradePerformance.trade_stats` split into Win/Loss tables."""
+        log = trades_df.rename(columns={
+            "symbol":                          "sym",
+            "return_net":                      "final_net",
+            "return_conservative":             "final_con",
+            "d5_conservative":                 "d5_con",
+            "d5_to_exit_conservative":         "d5_to_exit_con",
+            "max_intra_drawdown_net":          "max_dd_net",
+            "max_intra_drawdown_conservative": "max_dd_con",
+        })
+        wins   = log[log["final_net"]  > 0].to_dict(orient="records")
+        losses = log[log["final_net"] <= 0].to_dict(orient="records")
 
         sym_btns = [
             '<span class="toggle-lbl">Symbol:</span>',
@@ -530,8 +975,8 @@ class SignalTearsheet:
             return (
                 f'<tr class="trade-row {row_cls}" data-symbol="{t["sym"]}">'
                 f'<td>{t["label"]}</td>'
-                f'<td>{t["entry_dt"].date()}</td>'
-                f'<td>{t["exit_dt"].date()}</td>'
+                f'<td>{t["entry_date"].date()}</td>'
+                f'<td>{t["exit_date"].date()}</td>'
                 f'<td>{dur}</td>'
                 f'<td{_ret_style(t["d5_net"])}>{t["d5_net"]:+.1%}{short}</td>'
                 f'<td{_ret_style(t["d5_con"])}>{t["d5_con"]:+.1%}{short}</td>'
@@ -559,254 +1004,3 @@ class SignalTearsheet:
             )
         parts.append("</div>")
         return "\n".join(parts)
-
-    # ----------------------------------------------------------------- charts
-
-    def _paths_fig(
-        self,
-        paths: list[dict],
-        cum_key: str,
-        title: str,
-        avg_colour: str,
-        band_rgba: str,
-    ) -> go.Figure:
-        fig     = go.Figure()
-        symbols = sorted(set(t["sym"] for t in paths))
-        trace_meta: list[tuple[str, str]] = []
-        shown_labels: set[str] = set()
-
-        for t in paths:
-            cum    = t[cum_key]
-            win    = float(cum.iloc[-1]) > 0
-            colour = _P["accent_green"] if win else _P["accent_red"]
-            label  = "Win" if win else "Loss"
-            show   = label not in shown_labels
-            if show:
-                shown_labels.add(label)
-            n      = len(cum)
-            custom = [[
-                t["label"], str(t["entry_dt"].date()), str(t["exit_dt"].date()),
-                t["duration"],
-                f"{t['final_net']:+.1%}", f"{t['final_con']:+.1%}",
-                f"{t['max_dd_net']:.1%}", f"{t['max_dd_con']:.1%}",
-            ]] * n
-            fig.add_trace(go.Scatter(
-                x=list(range(n)), y=(cum * 100).tolist(),
-                mode="lines", line=dict(color=colour, width=1.5), opacity=0.55,
-                name=label, legendgroup=label, showlegend=show,
-                customdata=custom,
-                hovertemplate=(
-                    "<b>%{customdata[0]}</b><br>"
-                    "Entry: %{customdata[1]} &rarr; Exit: %{customdata[2]}<br>"
-                    "Duration: %{customdata[3]} bars | Day %{x}: <b>%{y:.1f}%</b><br>"
-                    "Final — net: %{customdata[4]}  |  conservative: %{customdata[5]}<br>"
-                    "Max DD — net: %{customdata[6]}  |  conservative: %{customdata[7]}"
-                    "<extra></extra>"
-                ),
-            ))
-            trace_meta.append((t["sym"], "trade"))
-
-        def _add_agg(subset: list[dict], group_key: str, visible: bool, show_legend: bool) -> None:
-            max_dur = max(len(t[cum_key]) for t in subset)
-            avgs, meds, stds = [], [], []
-            for d in range(max_dur):
-                vals = [float(t[cum_key].iloc[d]) * 100 for t in subset if d < len(t[cum_key])]
-                avgs.append(float(np.mean(vals)))
-                meds.append(float(np.median(vals)))
-                stds.append(float(np.std(vals)))
-            days  = list(range(max_dur))
-            upper = [a + s for a, s in zip(avgs, stds)]
-            lower = [a - s for a, s in zip(avgs, stds)]
-            fig.add_trace(go.Scatter(
-                x=days + days[::-1], y=upper + lower[::-1],
-                fill="toself", fillcolor=band_rgba,
-                line=dict(color="rgba(0,0,0,0)"),
-                name="±1σ", showlegend=False, hoverinfo="skip", visible=visible,
-            ))
-            fig.add_trace(go.Scatter(
-                x=days, y=avgs, mode="lines",
-                line=dict(color=avg_colour, width=2.5),
-                name="Mean", showlegend=show_legend, visible=visible,
-                hovertemplate="Day %{x} | Mean: <b>%{y:.1f}%</b><extra></extra>",
-            ))
-            fig.add_trace(go.Scatter(
-                x=days, y=meds, mode="lines",
-                line=dict(color=_P["accent_purple"], width=2, dash="dash"),
-                name="Median", showlegend=show_legend, visible=visible,
-                hovertemplate="Day %{x} | Median: <b>%{y:.1f}%</b><extra></extra>",
-            ))
-            trace_meta.extend([(group_key, "agg")] * 3)
-
-        _add_agg(paths, "__all__", visible=True, show_legend=True)
-        for sym in symbols:
-            sym_paths = [p for p in paths if p["sym"] == sym]
-            if sym_paths:
-                _add_agg(sym_paths, sym, visible=False, show_legend=False)
-
-        all_options: list[tuple[str, str | None]] = [("All", None)] + [(s, s) for s in symbols]
-        buttons = []
-        for btn_label, filter_sym in all_options:
-            vis: list[bool] = []
-            for sym, ttype in trace_meta:
-                if filter_sym is None:
-                    vis.append(ttype == "trade" or sym == "__all__")
-                else:
-                    vis.append(sym == filter_sym)
-            buttons.append(dict(label=btn_label, method="update", args=[{"visible": vis}]))
-
-        fig.update_layout(
-            updatemenus=[dict(
-                type="buttons", direction="right", buttons=buttons,
-                showactive=True,
-                x=0.0, xanchor="left", y=1.13, yanchor="top",
-                font=dict(size=11), bgcolor="#161b22", bordercolor="#30363d", active=0,
-            )]
-        )
-
-        # Day-5 marker
-        fig.add_vline(
-            x=5,
-            line=dict(color=_P["text_secondary"], width=1.2, dash="dot"),
-            annotation_text="Day 5",
-            annotation_position="top right",
-            annotation_font=dict(size=10, color=_P["text_secondary"]),
-        )
-        fig.add_hline(y=0, line=dict(color=_P["text_secondary"], width=0.8, dash="dash"))
-        apply_theme(fig, title=title, height=480)
-        fig.update_layout(
-            margin=dict(t=70),
-            xaxis_title="Bars since entry",
-            yaxis_title="Cumulative return from entry (%)",
-        )
-        return fig
-
-    def _timing_fig(
-        self,
-        paths: list[dict],
-        method: str,
-        sym_subset: list[str] | None = None,
-    ) -> go.Figure:
-        """Horizontal stacked bar: first-5-bars return (blue) + 5d→exit return (orange) per trade."""
-        d5_col   = "d5_net"         if method == "net" else "d5_con"
-        tail_col = "d5_to_exit_net" if method == "net" else "d5_to_exit_con"
-        label    = _METHOD_LABEL.get(method, method)
-
-        subset = sorted(
-            [p for p in paths if sym_subset is None or p["sym"] in sym_subset],
-            key=lambda p: (p["sym"], p["label"]),
-        )
-        labels    = [p["label"]    for p in subset]
-        d5_vals   = [p[d5_col]     for p in subset]
-        tail_vals = [p[tail_col]   for p in subset]
-
-        fig = go.Figure()
-        fig.add_trace(go.Bar(
-            orientation="h", y=labels, x=d5_vals,
-            name="First 5 bars",
-            marker_color=_P["accent_blue"], opacity=0.85,
-            hovertemplate="%{y}<br>First 5 bars: <b>%{x:.1%}</b><extra></extra>",
-        ))
-        fig.add_trace(go.Bar(
-            orientation="h", y=labels, x=tail_vals,
-            name="5d → Exit",
-            marker_color=_P["accent_orange"], opacity=0.85,
-            hovertemplate="%{y}<br>5d → Exit: <b>%{x:.1%}</b><extra></extra>",
-        ))
-
-        fig.add_vline(x=0, line=dict(color=_P["text_secondary"], width=0.8, dash="dash"))
-        height = max(300, 32 * len(subset) + 80)
-        fig.update_layout(barmode="relative")
-        apply_theme(fig, title=f"Entry Timing — {label} Fill", height=height)
-        fig.update_layout(
-            margin=dict(t=30),
-            xaxis=dict(tickformat=".0%", title_text="Return"),
-            yaxis=dict(autorange="reversed"),
-            legend=dict(orientation="h", y=1.08, x=0),
-        )
-        return fig
-
-    def _distribution_fig(
-        self,
-        method: str,
-        ts_net: pd.DataFrame,
-        ts_con: pd.DataFrame,
-        symbols: list[str] | None = None,
-    ) -> go.Figure:
-        trades   = self._a.trade_stats()
-        all_syms = sorted(trades["symbol"].unique())
-        syms     = symbols if symbols is not None else all_syms
-        n_sym    = len(syms)
-
-        ret_col = "return_conservative" if method == "conservative" else "return_net"
-        ts      = ts_con if method == "conservative" else ts_net
-        colour  = _METHOD_COLOUR.get(method, _P["accent_yellow"])
-        label   = _METHOD_LABEL.get(method, method)
-
-        fig = make_subplots(
-            rows=1, cols=n_sym, subplot_titles=syms,
-            shared_yaxes=True, horizontal_spacing=0.06,
-        )
-
-        for leg_colour, dash, leg_label in [
-            (colour,              "solid", f"Expectancy ({label})"),
-            (_P["accent_purple"], "dash",  f"Median ({label})"),
-        ]:
-            fig.add_trace(go.Scatter(
-                x=[None], y=[None], mode="lines",
-                line=dict(color=leg_colour, width=2, dash=dash), name=leg_label,
-            ))
-
-        shown: set[str] = set()
-        for col_i, sym in enumerate(syms, start=1):
-            ret = trades[trades["symbol"] == sym][ret_col]
-            for data, bar_colour, bar_label in [
-                (ret[ret <= 0], _P["accent_red"],   "Loss"),
-                (ret[ret >  0], _P["accent_green"], "Win"),
-            ]:
-                show = bar_label not in shown
-                if show:
-                    shown.add(bar_label)
-                fig.add_trace(go.Histogram(
-                    x=data, name=bar_label, legendgroup=bar_label, showlegend=show,
-                    marker_color=bar_colour, opacity=0.8, nbinsx=8,
-                ), row=1, col=col_i)
-
-            fig.add_vline(x=0,
-                          line_dash="dash", line_color=_P["text_secondary"], line_width=1,
-                          row=1, col=col_i)
-            fig.add_vline(x=float(ts.loc[sym, "expectancy"]),
-                          line_dash="solid", line_color=colour, line_width=2,
-                          row=1, col=col_i)
-            fig.add_vline(x=float(ts.loc[sym, "median_return"]),
-                          line_dash="dash", line_color=_P["accent_purple"], line_width=2,
-                          row=1, col=col_i)
-
-        fig.update_layout(barmode="overlay")
-        for i in range(1, n_sym + 1):
-            axis = f"xaxis{'' if i == 1 else i}"
-            fig.update_layout(**{axis: dict(tickformat=".0%", title_text="Return per trade")})
-        fig.update_layout(yaxis_title="# Trades")
-        apply_theme(fig, title=f"Return Distribution — {label} Fill", height=400)
-        return fig
-
-    # ----------------------------------------------------------------- helpers
-
-    @staticmethod
-    def _outlier_flag_html(flags: dict[str, bool]) -> str:
-        """Render a :meth:`SignalTradePerformance.quality_flags` result as an HTML string."""
-        parts: list[str] = []
-        if flags["median_negative"]:
-            parts.append("&#x26a0; median &lt; 0")
-        if flags["top_trade_outlier"]:
-            parts.append("&#x26a0; top trade &gt;30%")
-        if flags["skewed_right"]:
-            parts.append("&#x2191; skewed right")
-        elif flags["skewed_left"]:
-            parts.append("&#x2193; skewed left")
-        if flags["edge_reversed"]:
-            parts.append("&#x26a0; edge reversed vs net")
-        elif flags["fill_halves_edge"]:
-            parts.append("&#x26a0; fill halves edge")
-        if flags["median_flips"]:
-            parts.append("&#x26a0; median flips negative")
-        return ", ".join(parts) if parts else "&#x2014;"

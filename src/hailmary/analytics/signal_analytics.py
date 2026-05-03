@@ -21,7 +21,122 @@ import pandas as pd
 from hailmary.analytics.metrics import PerformanceMetrics
 from hailmary.backtest.signal_backtest import BarBacktestResult
 
+FillMethod = Literal["net", "mtc", "conservative"]
 PortfolioMode = Literal["rebalanced", "buy_and_hold", "fixed_stake"]
+
+_RETURN_COL: dict[str, str] = {
+    "net": "return_net",
+    "mtc": "return_mark_to_close",
+    "conservative": "return_conservative",
+}
+_EQUITY_COL: dict[str, str] = {
+    "net": "strategy_equity_net",
+    "mtc": "strategy_equity_mark_to_close",
+    "conservative": "strategy_equity_conservative",
+}
+
+# ---------------------------------------------------------------------------
+# Column / flag documentation — single source of truth shared across viz
+# (HTML tearsheet table notes) and notebook (markdown render of method docs).
+# Each entry is ``(display_label, description)``.  When a column changes or is
+# dropped, update the entry here and both surfaces pick it up.
+# ---------------------------------------------------------------------------
+
+ColumnDoc = tuple[str, str]
+
+TRADE_STATS_DOCS: dict[str, ColumnDoc] = {
+    "label":      ("Label",    "Display label like 'BTC-USD T3' (T-numbered per symbol)."),
+    "symbol":     ("Symbol",   "Symbol the trade was on."),
+    "entry_date": ("Entry",    "Bar timestamp at entry."),
+    "exit_date":  ("Exit",     "Bar timestamp at exit."),
+    "duration":   ("Duration", "Number of bars the trade was held."),
+    "return_net":          ("Return (Net)", "Compound net return (after fills + costs)."),
+    "return_mtc":          ("Return (MTC)", "Compound MTC return (no fill modelling)."),
+    "return_conservative": ("Return (Conservative)", "Compound return, worst-fill assumption."),
+    "max_intra_drawdown_net": ("Max DD (Net)", "Worst peak-to-trough (≤ 0)."),
+    "max_intra_drawdown_mtc": ("Max DD (MTC)", "Worst peak-to-trough, MTC fill."),
+    "max_intra_drawdown_conservative": (
+        "Max DD (Conservative)",
+        "Worst peak-to-trough, conservative fill.",
+    ),
+    "d5_net":          ("5d (Net)", "Net return over first 5 bars (or full trade if shorter)."),
+    "d5_mtc":          ("5d (MTC)", "MTC return over first 5 bars."),
+    "d5_conservative": ("5d (Conservative)", "Conservative return over first 5 bars."),
+    "d5_to_exit_net":          ("5d → Exit (Net)", "Net return bar 5 → close (0 if duration ≤ 5)."),
+    "d5_to_exit_mtc":          ("5d → Exit (MTC)", "MTC return bar 5 → close."),
+    "d5_to_exit_conservative": ("5d → Exit (Conservative)", "Conservative return bar 5 → close."),
+}
+
+TRADE_SUMMARY_DOCS: dict[str, ColumnDoc] = {
+    "n_trades":           ("N Trades",      "Number of entry-to-exit cycles."),
+    "win_rate":           ("Win Rate",      "Fraction of trades that closed positive."),
+    "avg_win":            ("Avg Win",       "Mean return across winning trades."),
+    "avg_loss":           ("Avg Loss",      "Mean return across losing trades (negative)."),
+    "expectancy":        ("Expectancy", "win_rate × avg_win + (1 − win_rate) × avg_loss."),
+    "expectancy_ex_top": ("Exp ex-Top", "Expectancy after dropping the best trade."),
+    "median_return":     ("Median",     "50th-pct return; Median ≪ Expectancy = right-skewed."),
+    "profit_factor":      ("Profit Factor", "Σ wins / |Σ losses|; > 1 earns more than it loses."),
+    "max_win":            ("Max Win",       "Best single-trade return."),
+    "max_loss":           ("Max Loss",      "Worst single-trade return."),
+    "skewness":           ("Skewness",      "> +1: rare large wins; < −1: rare large losses."),
+    "avg_duration":       ("Avg Duration",  "Mean bars held per trade."),
+    "avg_intra_drawdown": ("Avg DD",        "Mean of per-trade max intra-drawdowns (≤ 0)."),
+    "max_intra_drawdown": ("Worst DD",      "Worst per-trade intra-drawdown observed (≤ 0)."),
+}
+
+QUALITY_FLAG_DOCS: dict[str, ColumnDoc] = {
+    "median_negative":   ("Median < 0",       "Expectancy > 0 but median < 0."),
+    "top_trade_outlier": ("Top Trade > 30%",  "Expectancy > 0 and best trade > 30% of it."),
+    "skewed_right":      ("Skewed Right",     "Skewness > 1.5 — rare large wins."),
+    "skewed_left":       ("Skewed Left",      "Skewness < −1.5 — rare large losses."),
+    "edge_reversed":     ("Edge Reversed",    "Net expectancy > 0 but this fill ≤ 0."),
+    "fill_halves_edge":  ("Fill Halves Edge", "This fill's expectancy < 50% of net."),
+    "median_flips":      ("Median Flips",     "Net median ≥ 0 but this fill's median < 0."),
+}
+
+D5_STATS_DOCS: dict[str, ColumnDoc] = {
+    "wr_d5":        ("WR @ 5d",      "Win rate at bar 5 — trades ≥ 5 bars only."),
+    "wr_d5_n":      ("N (≥5d)",      "Number of trades that reached bar 5."),
+    "wr_d5_nwin":   ("Wins (5d)",    "Number of those trades positive at bar 5."),
+    "wr_tail":      ("WR 5d → Exit", "Win rate from bar 5 to close — trades > 5 bars only."),
+    "wr_tail_n":    ("N (>5d)",      "Number of trades with a tail beyond bar 5."),
+    "wr_tail_nwin": ("Wins (tail)",  "Number of those trades whose tail segment was positive."),
+}
+
+FILL_METHOD_DOCS: dict[str, ColumnDoc] = {
+    "net":          ("Net",          "MTC fill minus round-trip cost — realistic execution."),
+    "mtc":          ("MTC",          "Mark-to-close — frictionless benchmark, no fill modelling."),
+    "conservative": ("Conservative", "Worst-fill: high entry / low exit — bear-case execution."),
+}
+
+
+def docs_markdown(docs: dict[str, ColumnDoc], title: str | None = None) -> str:
+    """Render a docs dict as a Markdown bullet list."""
+    lines = [f"**{title}**", ""] if title else []
+    for label, desc in docs.values():
+        lines.append(f"- **{label}** — {desc}")
+    return "\n".join(lines)
+
+
+def docs_html_notes(*docs: dict[str, ColumnDoc]) -> list[str]:
+    """Render one or more docs dicts as ``<b>label</b> — desc`` HTML strings."""
+    notes: list[str] = []
+    for d in docs:
+        for label, desc in d.values():
+            notes.append(f"<b>{label}</b> — {desc}")
+    return notes
+
+
+def _compound(x: pd.Series) -> float:
+    return float((1 + x).prod() - 1)
+
+
+def _compound_first_5(x: pd.Series) -> float:
+    return _compound(x.iloc[:5])
+
+
+def _compound_after_5(x: pd.Series) -> float:
+    return _compound(x.iloc[5:])
 
 
 def _intra_drawdown(returns: pd.Series) -> float:
@@ -47,12 +162,14 @@ class SignalTradePerformance:
         bt        = BarBacktest().run(signal_df)
         trades    = SignalTradePerformance(bt)
 
-        trades.trade_summary()                  # per-symbol edge / distribution stats
-        trades.trade_stats()                    # one row per entry→exit cycle
-        paths = trades.trade_paths()            # per-trade cumulative-return paths
-        SignalTradePerformance.d5_stats("BTC-USD", "net", paths)
-        SignalTradePerformance.quality_flags(expectancy=0.05, expectancy_ex_top=0.01,
-                                             median_return=0.02, skewness=0.3)
+        ts = trades.trade_stats()                           # one row per trade
+        trades.trade_summary(trade_stats=ts)                # per-symbol edge stats
+        paths = trades.trade_paths(trade_stats=ts)          # per-bar cum returns
+        SignalTradePerformance.d5_stats("BTC-USD", "net", trade_stats=ts)
+
+    The expensive primitive is :meth:`trade_stats`; every other method accepts
+    it as an optional ``trade_stats`` keyword so callers can compute it once
+    and thread it through.
     """
 
     def __init__(self, result: BarBacktestResult) -> None:
@@ -61,54 +178,68 @@ class SignalTradePerformance:
     # ----------------------------------------------------------------- per-trade
 
     def trade_stats(self) -> pd.DataFrame:
-        """One row per entry-to-exit cycle across all symbols.
+        """One row per entry-to-exit cycle — the canonical per-trade scalar table.
 
         Returns:
-            DataFrame with columns ``symbol``, ``entry_date``, ``exit_date``,
-            ``duration`` (bars), ``return_net``, ``return_mtc``,
-            ``return_conservative`` (all compound), and
-            ``max_intra_drawdown_net``, ``max_intra_drawdown_mtc``,
-            ``max_intra_drawdown_conservative`` (worst peak-to-trough within the
-            cycle for each fill method; always ≤ 0).
+            DataFrame with columns ``symbol``, ``label`` (e.g. ``"BTC-USD T3"``),
+            ``entry_date``, ``exit_date``, ``duration`` (bars), and for each
+            fill method ``m`` ∈ {``net``, ``mtc``, ``conservative``}:
+
+            - ``return_{m}`` — compound return over the trade
+            - ``max_intra_drawdown_{m}`` — worst peak-to-trough within the
+              cycle (always ≤ 0)
+            - ``d5_{m}`` — compound return over the first 5 bars (or the full
+              trade if shorter)
+            - ``d5_to_exit_{m}`` — compound return from bar 5 to close
+              (0 when ``duration ≤ 5``)
         """
         in_trade = self._data[self._data["cycle"] != "None"].reset_index()
-        return (
+
+        aggs: dict[str, tuple] = {
+            "entry_date": ("timestamp", "first"),
+            "exit_date":  ("timestamp", "last"),
+            "duration":   ("timestamp", "count"),
+        }
+        for method, ret_col in _RETURN_COL.items():
+            aggs[f"return_{method}"]             = (ret_col, _compound)
+            aggs[f"max_intra_drawdown_{method}"] = (ret_col, _intra_drawdown)
+            aggs[f"d5_{method}"]                 = (ret_col, _compound_first_5)
+            aggs[f"d5_to_exit_{method}"]         = (ret_col, _compound_after_5)
+
+        out = (
             in_trade.groupby(["symbol", "trade_cycle_id"])
-            .agg(
-                entry_date=("timestamp", "first"),
-                exit_date=("timestamp", "last"),
-                duration=("timestamp", "count"),
-                return_net=("return_net", lambda x: (1 + x).prod() - 1),
-                return_mtc=("return_mark_to_close", lambda x: (1 + x).prod() - 1),
-                return_conservative=("return_conservative", lambda x: (1 + x).prod() - 1),
-                max_intra_drawdown_net=("return_net", _intra_drawdown),
-                max_intra_drawdown_mtc=("return_mark_to_close", _intra_drawdown),
-                max_intra_drawdown_conservative=("return_conservative", _intra_drawdown),
-            )
+            .agg(**aggs)
             .reset_index()
             .drop(columns="trade_cycle_id")
             .sort_values(["symbol", "entry_date"])
             .reset_index(drop=True)
         )
+        counter = out.groupby("symbol").cumcount() + 1
+        out.insert(1, "label", out["symbol"] + " T" + counter.astype(str))
+        return out
 
-    def trade_summary(self, method: str = "net") -> pd.DataFrame:
+    def trade_summary(
+        self,
+        method: FillMethod = "net",
+        *,
+        trade_stats: pd.DataFrame | None = None,
+    ) -> pd.DataFrame:
         """Per-symbol signal-quality stats treating each entry-to-exit cycle as an independent bet.
 
         Args:
-            method: Return column — ``"net"`` (default), ``"mtc"``, or ``"conservative"``.
+            method: Fill method — ``"net"`` (default), ``"mtc"``, or ``"conservative"``.
+            trade_stats: Precomputed :meth:`trade_stats` frame to avoid recomputing.
 
         Returns:
             DataFrame indexed by symbol with columns ``n_trades``, ``win_rate``,
-            ``avg_win``, ``avg_loss``, ``expectancy``, ``profit_factor``,
-            ``avg_duration``, ``avg_intra_drawdown``, ``max_intra_drawdown``.
+            ``avg_win``, ``avg_loss``, ``expectancy``, ``expectancy_ex_top``,
+            ``median_return``, ``profit_factor``, ``max_win``, ``max_loss``,
+            ``skewness``, ``avg_duration``, ``avg_intra_drawdown``,
+            ``max_intra_drawdown``.
         """
-        trades = self.trade_stats()
-        ret_col = {
-            "net": "return_net",
-            "mtc": "return_mtc",
-            "conservative": "return_conservative",
-        }[method]
-        dd_col = f"max_intra_drawdown_{method}"
+        ts = trade_stats if trade_stats is not None else self.trade_stats()
+        ret_col = f"return_{method}"
+        dd_col  = f"max_intra_drawdown_{method}"
 
         def _agg(g: pd.DataFrame) -> pd.Series:
             ret = g[ret_col]
@@ -121,14 +252,15 @@ class SignalTradePerformance:
             avg_loss = float(losses.mean()) if len(losses) > 0 else 0.0
             loss_sum = float(losses.sum())
             expectancy = win_rate * avg_win + (1 - win_rate) * avg_loss
-            ret_ex_top = ret.drop(ret.idxmax()) if len(ret) > 1 else ret
+            # "Expectancy excluding the best trade" needs at least 2 trades to be meaningful.
+            expectancy_ex_top = float(ret.drop(ret.idxmax()).mean()) if n > 1 else float("nan")
             return pd.Series({
                 "n_trades": n,
                 "win_rate": win_rate,
                 "avg_win": avg_win,
                 "avg_loss": avg_loss,
                 "expectancy": expectancy,
-                "expectancy_ex_top": float(ret_ex_top.mean()),
+                "expectancy_ex_top": expectancy_ex_top,
                 "median_return": float(ret.median()),
                 "profit_factor": float(wins.sum()) / abs(loss_sum) if loss_sum != 0 else float("inf"),
                 "max_win": float(wins.max()) if len(wins) > 0 else 0.0,
@@ -139,106 +271,105 @@ class SignalTradePerformance:
                 "max_intra_drawdown": float(dd.min()),
             })
 
-        cols = [ret_col, dd_col, "duration"]
-        return trades.groupby("symbol")[cols].apply(_agg)
+        return ts.groupby("symbol")[[ret_col, dd_col, "duration"]].apply(_agg)
 
     # ----------------------------------------------------------------- paths / timing / flags
 
-    def trade_paths(self) -> list[dict]:
-        """Build one dict per entry-to-exit cycle with cumulative return paths and timing fields.
+    def trade_paths(self, *, trade_stats: pd.DataFrame | None = None) -> list[dict]:
+        """Per-trade cumulative-return paths plus identifying scalars.
+
+        The scalar fields (``final_*``, ``d5_*``, ``max_dd_*``, ``duration``,
+        ``entry_dt``, ``exit_dt``) are sourced from :meth:`trade_stats` rather
+        than recomputed.  This method's unique contribution is the per-bar
+        ``cum_net`` / ``cum_con`` Series used by chart helpers.
+
+        Args:
+            trade_stats: Precomputed :meth:`trade_stats` frame to avoid recomputing.
 
         Returns:
             List of dicts, one per trade, each containing:
 
-            - ``label`` — e.g. "BTC-USD T3"
+            - ``label`` — e.g. ``"BTC-USD T3"``
             - ``sym`` — symbol string
             - ``cum_net`` / ``cum_con`` — cumulative return Series starting at 0.0
             - ``entry_dt`` / ``exit_dt`` — Timestamps
             - ``duration`` — number of bars in the trade
             - ``final_net`` / ``final_con`` — compound return over the full trade
             - ``d5_net`` / ``d5_con`` — compound return at bar 5 (clamped to duration)
-            - ``d5_to_exit_net`` / ``d5_to_exit_con`` — geometric return from bar 5 to close
+            - ``d5_to_exit_net`` / ``d5_to_exit_con`` — return from bar 5 to close
             - ``max_dd_net`` / ``max_dd_con`` — worst peak-to-trough within the trade
         """
-        df = self._data
-        trade_stats = self.trade_stats()
-        paths: list[dict] = []
-        sym_counters: dict[str, int] = {}
+        ts = trade_stats if trade_stats is not None else self.trade_stats()
+        ts_by_label = ts.set_index("label")
 
+        df = self._data
+        paths: list[dict] = []
+        sym_counter: dict[str, int] = {}
         for (sym, _trade_id), group in df[df["cycle"] != "None"].groupby(
             ["symbol", "trade_cycle_id"]
         ):
-            sym_counters[sym] = sym_counters.get(sym, 0) + 1
-            label    = f"{sym} T{sym_counters[sym]}"
+            sym_counter[sym] = sym_counter.get(sym, 0) + 1
+            label    = f"{sym} T{sym_counter[sym]}"
             rets_net = group["return_net"].reset_index(drop=True)
             rets_con = group["return_conservative"].reset_index(drop=True)
             cum_net  = pd.concat([pd.Series([0.0]), (1 + rets_net).cumprod() - 1]).reset_index(drop=True)
             cum_con  = pd.concat([pd.Series([0.0]), (1 + rets_con).cumprod() - 1]).reset_index(drop=True)
-            entry_dt = group.index.get_level_values("timestamp")[0]
-            exit_dt  = group.index.get_level_values("timestamp")[-1]
-            ts_row   = trade_stats[
-                (trade_stats["symbol"] == sym) & (trade_stats["entry_date"] == entry_dt)
-            ]
-            d5        = min(5, len(cum_net) - 1)
-            d5_net    = float(cum_net.iloc[d5])
-            d5_con    = float(cum_con.iloc[d5])
-            final_net = float(cum_net.iloc[-1])
-            final_con = float(cum_con.iloc[-1])
+            row      = ts_by_label.loc[label]
             paths.append({
                 "label":          label,
                 "sym":            sym,
                 "cum_net":        cum_net,
                 "cum_con":        cum_con,
-                "entry_dt":       entry_dt,
-                "exit_dt":        exit_dt,
-                "duration":       len(rets_net),
-                "final_net":      final_net,
-                "final_con":      final_con,
-                "d5_net":         d5_net,
-                "d5_con":         d5_con,
-                "d5_to_exit_net": (1 + final_net) / (1 + d5_net) - 1,
-                "d5_to_exit_con": (1 + final_con) / (1 + d5_con) - 1,
-                "max_dd_net":     float(ts_row["max_intra_drawdown_net"].iloc[0])           if len(ts_row) else float("nan"),
-                "max_dd_con":     float(ts_row["max_intra_drawdown_conservative"].iloc[0])  if len(ts_row) else float("nan"),
+                "entry_dt":       row["entry_date"],
+                "exit_dt":        row["exit_date"],
+                "duration":       int(row["duration"]),
+                "final_net":      float(row["return_net"]),
+                "final_con":      float(row["return_conservative"]),
+                "d5_net":         float(row["d5_net"]),
+                "d5_con":         float(row["d5_conservative"]),
+                "d5_to_exit_net": float(row["d5_to_exit_net"]),
+                "d5_to_exit_con": float(row["d5_to_exit_conservative"]),
+                "max_dd_net":     float(row["max_intra_drawdown_net"]),
+                "max_dd_con":     float(row["max_intra_drawdown_conservative"]),
             })
         return paths
 
     @staticmethod
-    def d5_stats(sym: str, method: str, paths: list[dict]) -> dict:
+    def d5_stats(
+        sym: str,
+        method: FillMethod,
+        *,
+        trade_stats: pd.DataFrame,
+    ) -> dict:
         """Timing statistics at the 5-bar mark for one symbol.
 
         Args:
             sym: Symbol to filter on.
-            method: ``"net"`` or ``"conservative"``.
-            paths: Output of :meth:`trade_paths`.
+            method: ``"net"``, ``"mtc"``, or ``"conservative"``.
+            trade_stats: :meth:`trade_stats` DataFrame.
 
         Returns:
             Dict with keys ``wr_d5``, ``wr_d5_n``, ``wr_d5_nwin``,
-            ``wr_tail``, ``wr_tail_n``, ``wr_tail_nwin``, ``capture_med``.
-            Win-rate fields are ``nan`` when no qualifying trades exist.
+            ``wr_tail``, ``wr_tail_n``, ``wr_tail_nwin``.  Win-rate fields are
+            ``nan`` when no qualifying trades exist.
         """
-        sym_paths = [p for p in paths if p["sym"] == sym]
-        if not sym_paths:
+        sym_rows = trade_stats[trade_stats["symbol"] == sym]
+        if sym_rows.empty:
             return {
                 "wr_d5": float("nan"), "wr_d5_n": 0, "wr_d5_nwin": 0,
                 "wr_tail": float("nan"), "wr_tail_n": 0, "wr_tail_nwin": 0,
-                "capture_med": float("nan"),
             }
-        d5_col   = "d5_net"         if method == "net" else "d5_con"
-        tail_col = "d5_to_exit_net" if method == "net" else "d5_to_exit_con"
 
-        # WR@5d: trades that actually reached bar 5
-        d5_paths   = [p for p in sym_paths if p["duration"] >= 5]
-        # 5d→Exit WR and capture: trades with a tail segment beyond bar 5
-        tail_paths = [p for p in sym_paths if p["duration"] > 5]
+        d5_col   = f"d5_{method}"
+        tail_col = f"d5_to_exit_{method}"
 
-        d5_vals   = [p[d5_col]   for p in d5_paths]
-        tail_vals = [p[tail_col] for p in tail_paths]
+        d5_rows   = sym_rows[sym_rows["duration"] >= 5]
+        tail_rows = sym_rows[sym_rows["duration"] > 5]
 
-        n_d5     = len(d5_vals)
-        n_win_d5 = sum(1 for v in d5_vals if v > 0)
-        n_tail   = len(tail_vals)
-        n_win_t  = sum(1 for v in tail_vals if v > 0)
+        n_d5     = len(d5_rows)
+        n_tail   = len(tail_rows)
+        n_win_d5 = int((d5_rows[d5_col] > 0).sum())
+        n_win_t  = int((tail_rows[tail_col] > 0).sum())
 
         return {
             "wr_d5":        n_win_d5 / n_d5 if n_d5 > 0 else float("nan"),
@@ -251,22 +382,18 @@ class SignalTradePerformance:
 
     @staticmethod
     def quality_flags(
-        expectancy: float,
-        expectancy_ex_top: float,
-        median_return: float,
-        skewness: float,
-        net_expectancy: float | None = None,
-        net_median: float | None = None,
+        row: pd.Series,
+        *,
+        net_row: pd.Series | None = None,
     ) -> dict[str, bool]:
-        """Signal-quality warning flags as a plain boolean mapping.
+        """Signal-quality warning flags for a single row of :meth:`trade_summary`.
 
         Args:
-            expectancy: Expected return per trade.
-            expectancy_ex_top: Expectancy after removing the best trade.
-            median_return: Median trade return.
-            skewness: Return distribution skewness.
-            net_expectancy: Net-fill expectancy (supply when computing conservative flags).
-            net_median: Net-fill median (supply when computing conservative flags).
+            row: A row of :meth:`trade_summary` — must have ``expectancy``,
+                ``expectancy_ex_top``, ``median_return``, ``skewness``.
+            net_row: Corresponding net-fill row (with ``expectancy`` and
+                ``median_return``).  Supply when ``row`` is a non-net method
+                so the cross-fill flags can fire.
 
         Returns:
             Dict mapping flag name → ``True`` if the condition is triggered:
@@ -274,23 +401,92 @@ class SignalTradePerformance:
             - ``median_negative`` — expectancy > 0 but median < 0
             - ``top_trade_outlier`` — expectancy > 0 and best trade accounts for > 30% of it
             - ``skewed_right`` / ``skewed_left`` — |skewness| > 1.5
-            - ``edge_reversed`` — conservative expectancy ≤ 0 while net > 0
-            - ``fill_halves_edge`` — conservative < 50% of net expectancy
-            - ``median_flips`` — net median ≥ 0 but conservative median < 0
+            - ``edge_reversed`` — net expectancy > 0 while this row's ≤ 0
+            - ``fill_halves_edge`` — this row's expectancy < 50% of net
+            - ``median_flips`` — net median ≥ 0 but this row's median < 0
         """
+        expectancy        = float(row["expectancy"])
+        expectancy_ex_top = float(row["expectancy_ex_top"])
+        median_return     = float(row["median_return"])
+        skewness          = float(row["skewness"])
+
+        # NaN-safe: with n=1 expectancy_ex_top is NaN and the comparison resolves to False.
         top_share = (
             abs(expectancy - expectancy_ex_top) / abs(expectancy)
-            if expectancy > 0 else 0.0
+            if expectancy > 0 and pd.notna(expectancy_ex_top) else 0.0
         )
-        return {
+        flags = {
             "median_negative":   expectancy > 0 and median_return < 0,
             "top_trade_outlier": expectancy > 0 and top_share > 0.3,
             "skewed_right":      skewness > 1.5,
             "skewed_left":       skewness < -1.5,
-            "edge_reversed":     net_expectancy is not None and net_expectancy > 0 and expectancy <= 0,
-            "fill_halves_edge":  net_expectancy is not None and net_expectancy > 0 and 0 < expectancy < net_expectancy * 0.5,
-            "median_flips":      net_median is not None and net_median >= 0 and median_return < 0,
+            "edge_reversed":     False,
+            "fill_halves_edge":  False,
+            "median_flips":      False,
         }
+        if net_row is not None:
+            net_exp = float(net_row["expectancy"])
+            net_med = float(net_row["median_return"])
+            flags["edge_reversed"]    = net_exp > 0 and expectancy <= 0
+            flags["fill_halves_edge"] = net_exp > 0 and 0 < expectancy < net_exp * 0.5
+            flags["median_flips"]     = net_med >= 0 and median_return < 0
+        return flags
+
+    # ----------------------------------------------------------------- display-shaped data
+
+    def quality_table(
+        self,
+        methods: tuple[FillMethod, ...] = ("net", "conservative"),
+        *,
+        trade_stats: pd.DataFrame | None = None,
+    ) -> pd.DataFrame:
+        """Wide per-(symbol, method) quality DataFrame for downstream display.
+
+        Combines :meth:`trade_summary` metrics with :meth:`d5_stats` timing and
+        :meth:`quality_flags` into one frame indexed by ``(symbol, method)``.
+
+        When ``"net"`` is in ``methods``, non-net rows compare against net via
+        ``net_row`` so the cross-fill flags (``edge_reversed``,
+        ``fill_halves_edge``, ``median_flips``) populate.
+
+        Args:
+            methods: Fill methods to include, default ``("net", "conservative")``.
+            trade_stats: Precomputed :meth:`trade_stats` frame to avoid recomputing.
+
+        Returns:
+            DataFrame indexed by ``(symbol, method)`` with the per-symbol
+            summary columns plus ``wr_d5``, ``wr_d5_n``, ``wr_d5_nwin``,
+            ``wr_tail``, ``wr_tail_n``, ``wr_tail_nwin``, and a ``flags``
+            column holding the raw ``dict[str, bool]`` from
+            :meth:`quality_flags`.
+        """
+        ts = trade_stats if trade_stats is not None else self.trade_stats()
+        summaries = {m: self.trade_summary(m, trade_stats=ts) for m in methods}
+        ts_net = summaries.get("net")
+
+        all_symbols: set[str] = set()
+        for s in summaries.values():
+            all_symbols.update(s.index)
+
+        rows: list[dict] = []
+        for sym in sorted(all_symbols):
+            for method in methods:
+                summary = summaries[method]
+                if sym not in summary.index:
+                    continue
+                row = summary.loc[sym].to_dict()
+                row["symbol"] = sym
+                row["method"] = method
+                row.update(self.d5_stats(sym, method, trade_stats=ts))
+                net_row = (
+                    ts_net.loc[sym]
+                    if method != "net" and ts_net is not None and sym in ts_net.index
+                    else None
+                )
+                row["flags"] = self.quality_flags(summary.loc[sym], net_row=net_row)
+                rows.append(row)
+
+        return pd.DataFrame(rows).set_index(["symbol", "method"])
 
 
 class SignalAllocationPerformance:
@@ -338,34 +534,28 @@ class SignalAllocationPerformance:
         """
         total_bars = self._data.groupby(level="symbol").size()
         base = self._data.groupby(level="symbol").agg(
-            return_mtc=("strategy_equity_mark_to_close", lambda x: x.iloc[-1] - 1),
-            return_conservative=("strategy_equity_conservative", lambda x: x.iloc[-1] - 1),
-            return_net=("strategy_equity_net", lambda x: x.iloc[-1] - 1),
+            return_mtc=(_EQUITY_COL["mtc"], lambda x: x.iloc[-1] - 1),
+            return_conservative=(_EQUITY_COL["conservative"], lambda x: x.iloc[-1] - 1),
+            return_net=(_EQUITY_COL["net"], lambda x: x.iloc[-1] - 1),
             entries=("enter", "sum"),
             exits=("exit", "sum"),
             invested_days=("cycle", lambda x: x.ne("None").sum()),
         ).assign(pct_invested=lambda df: df["invested_days"] / total_bars * 100)
         return base.join(self._drawdown_summary())
 
-    def equity(self, method: str = "mtc") -> pd.DataFrame:
+    def equity(self, method: FillMethod = "mtc") -> pd.DataFrame:
         """Wide equity curve DataFrame (index=timestamp, columns=symbol).
 
         Args:
-            method: ``"mtc"`` for mark-to-close (default) or
-                    ``"conservative"`` for worst-fill.
+            method: ``"mtc"`` (default), ``"conservative"``, or ``"net"``.
         """
-        col = {
-            "mtc": "strategy_equity_mark_to_close",
-            "conservative": "strategy_equity_conservative",
-            "net": "strategy_equity_net",
-        }[method]
-        return self._data[col].unstack(level="symbol")
+        return self._data[_EQUITY_COL[method]].unstack(level="symbol")
 
     # ----------------------------------------------------------------- portfolio
 
     def portfolio_equity(
         self,
-        method: str = "mtc",
+        method: FillMethod = "mtc",
         mode: PortfolioMode = "rebalanced",
         amount_per_entry: float = 1_000.0,
     ) -> pd.Series:
@@ -398,7 +588,7 @@ class SignalAllocationPerformance:
 
     def portfolio_returns(
         self,
-        method: str = "mtc",
+        method: FillMethod = "mtc",
         mode: PortfolioMode = "rebalanced",
         amount_per_entry: float = 1_000.0,
     ) -> pd.Series:
@@ -420,7 +610,7 @@ class SignalAllocationPerformance:
 
     def portfolio_metrics(
         self,
-        method: str = "mtc",
+        method: FillMethod = "mtc",
         risk_free_rate: float = 0.0,
         mode: PortfolioMode = "rebalanced",
         amount_per_entry: float = 1_000.0,
@@ -446,56 +636,40 @@ class SignalAllocationPerformance:
     def _drawdown_summary(self) -> pd.DataFrame:
         """Per-symbol max and average drawdown for MTC and conservative equity curves."""
         result: dict[str, pd.Series] = {}
-        for col, suffix in [
-            ("strategy_equity_mark_to_close", "mtc"),
-            ("strategy_equity_conservative", "conservative"),
-        ]:
-            equity = self._data[col].unstack(level="symbol")
+        for method in ("mtc", "conservative"):
+            equity = self._data[_EQUITY_COL[method]].unstack(level="symbol")
             dd = equity / equity.cummax() - 1
-            result[f"max_drawdown_{suffix}"] = dd.min()
+            result[f"max_drawdown_{method}"] = dd.min()
             in_dd = dd[dd < 0]
-            result[f"avg_drawdown_{suffix}"] = in_dd.mean().where(in_dd.count() > 0, 0.0)
+            result[f"avg_drawdown_{method}"] = in_dd.mean().where(in_dd.count() > 0, 0.0)
         return pd.DataFrame(result)
 
-    def _portfolio_returns_rebalanced(self, method: str) -> pd.Series:
+    def _portfolio_returns_rebalanced(self, method: FillMethod) -> pd.Series:
         """Daily returns assuming the portfolio rebalances to 1/N_universe each bar."""
-        ret_col = {
-            "mtc": "return_mark_to_close",
-            "conservative": "return_conservative",
-            "net": "return_net",
-        }[method]
         in_trade = (self._data["cycle"] != "None").astype(int).unstack(level="symbol")
-        returns_wide = self._data[ret_col].unstack(level="symbol")
+        returns_wide = self._data[_RETURN_COL[method]].unstack(level="symbol")
         weights = in_trade / len(in_trade.columns)
         return (weights * returns_wide).sum(axis=1).rename(f"portfolio_returns_{method}_rebalanced")
 
-    def _portfolio_equity_buy_and_hold(self, method: str) -> pd.Series:
+    def _portfolio_equity_buy_and_hold(self, method: FillMethod) -> pd.Series:
         """Portfolio equity when each position compounds freely from its 1/N_universe entry.
 
         Equivalent to the mean of the per-symbol equity curves: each symbol starts
         at 1/N and drifts with its own cumulative return.  No intra-period rebalancing.
         """
-        equity_col = {
-            "mtc": "strategy_equity_mark_to_close",
-            "conservative": "strategy_equity_conservative",
-            "net": "strategy_equity_net",
-        }[method]
-        equity_wide = self._data[equity_col].unstack(level="symbol")
+        equity_wide = self._data[_EQUITY_COL[method]].unstack(level="symbol")
         return equity_wide.mean(axis=1).rename(f"portfolio_equity_{method}_buy_and_hold")
 
-    def _portfolio_equity_fixed_stake(self, method: str, amount_per_entry: float) -> pd.Series:
+    def _portfolio_equity_fixed_stake(
+        self, method: FillMethod, amount_per_entry: float
+    ) -> pd.Series:
         """NAV curve for the fixed-dollar-per-entry capital model.
 
         Within each trade the position compounds from amount_per_entry.
         Realised P&L from closed trades accumulates as cash and does not
         affect the entry size of future trades.
         """
-        ret_col = {
-            "mtc": "return_mark_to_close",
-            "conservative": "return_conservative",
-            "net": "return_net",
-        }[method]
-
+        ret_col = _RETURN_COL[method]
         df = self._data[[ret_col, "cycle", "trade_cycle_id"]]
         in_trade_mask = df["cycle"] != "None"
         exit_mask = df["cycle"] == "exit"

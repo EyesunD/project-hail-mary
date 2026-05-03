@@ -132,10 +132,18 @@ def test_portfolio_metrics_sharpe_is_finite(alloc: SignalAllocationPerformance) 
 
 def test_trade_stats_columns(trades: SignalTradePerformance) -> None:
     cols = set(trades.trade_stats().columns)
-    assert {"symbol", "entry_date", "exit_date", "duration",
+    assert {"symbol", "label", "entry_date", "exit_date", "duration",
             "return_net", "return_mtc", "return_conservative",
             "max_intra_drawdown_net", "max_intra_drawdown_mtc",
-            "max_intra_drawdown_conservative"}.issubset(cols)
+            "max_intra_drawdown_conservative",
+            "d5_net", "d5_mtc", "d5_conservative",
+            "d5_to_exit_net", "d5_to_exit_mtc", "d5_to_exit_conservative"}.issubset(cols)
+
+
+def test_trade_stats_labels_unique(trades: SignalTradePerformance) -> None:
+    labels = trades.trade_stats()["label"]
+    assert labels.is_unique
+    assert (labels.str.contains(r"^\S+ T\d+$", regex=True)).all()
 
 
 def test_trade_stats_drawdown_bounded(trades: SignalTradePerformance) -> None:
@@ -189,6 +197,63 @@ def test_trade_summary_drawdown_bounded(trades: SignalTradePerformance) -> None:
     ts = trades.trade_summary()
     assert (ts["avg_intra_drawdown"] <= 1e-9).all()
     assert (ts["max_intra_drawdown"] <= 1e-9).all()
+
+
+# ----------------------------------------------------------------- quality_table
+
+
+def test_quality_table_multiindex_is_symbol_method(trades: SignalTradePerformance) -> None:
+    qt = trades.quality_table()
+    assert qt.index.names == ["symbol", "method"]
+    methods = qt.index.get_level_values("method").unique().tolist()
+    assert set(methods) == {"net", "conservative"}
+
+
+def test_quality_table_has_d5_and_flag_columns(trades: SignalTradePerformance) -> None:
+    cols = set(trades.quality_table().columns)
+    assert {"wr_d5", "wr_d5_n", "wr_d5_nwin",
+            "wr_tail", "wr_tail_n", "wr_tail_nwin",
+            "flags"}.issubset(cols)
+
+
+def test_quality_table_flags_are_dicts(trades: SignalTradePerformance) -> None:
+    qt = trades.quality_table()
+    for flags in qt["flags"]:
+        assert isinstance(flags, dict)
+        assert {"median_negative", "top_trade_outlier", "skewed_right",
+                "skewed_left", "edge_reversed", "fill_halves_edge",
+                "median_flips"}.issubset(flags.keys())
+
+
+def test_quality_table_net_rows_have_no_cross_fill_flags(
+    trades: SignalTradePerformance,
+) -> None:
+    qt = trades.quality_table()
+    for sym in qt.index.get_level_values("symbol").unique():
+        flags = qt.loc[(sym, "net"), "flags"]
+        assert flags["edge_reversed"] is False
+        assert flags["fill_halves_edge"] is False
+        assert flags["median_flips"] is False
+
+
+# ----------------------------------------------------------------- trade_paths
+
+
+def test_trade_paths_count_matches_trade_stats(trades: SignalTradePerformance) -> None:
+    assert len(trades.trade_paths()) == len(trades.trade_stats())
+
+
+def test_trade_paths_accepts_precomputed_trade_stats(
+    trades: SignalTradePerformance,
+) -> None:
+    ts = trades.trade_stats()
+    assert len(trades.trade_paths(trade_stats=ts)) == len(ts)
+
+
+def test_trade_paths_cum_starts_at_zero(trades: SignalTradePerformance) -> None:
+    for p in trades.trade_paths():
+        assert float(p["cum_net"].iloc[0]) == 0.0
+        assert float(p["cum_con"].iloc[0]) == 0.0
 
 
 # ----------------------------------------------------------------- fixed_stake mode

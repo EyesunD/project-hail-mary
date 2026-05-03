@@ -51,6 +51,7 @@ notebooks = [
     "jupyterlab>=4.2",
     "ipywidgets>=8.1",
     "nbformat>=5.10",
+    "jinja2>=3.1",  # required by pandas Styler used in viz helpers
 ]
 alpaca = [
     "alpaca-py>=0.21",

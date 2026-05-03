@@ -10,7 +10,7 @@ designed to support multiple signals as the system grows.
 |---|---|
 | **Data** | Abstract `DataProvider` with Yahoo Finance, Alpaca, Polygon, and CSV backends. Priority-based registry with automatic failover. Parquet disk cache. |
 | **Signals** | `TrendSignal` — generates look-ahead-safe signal columns (`ma`, `signal_open`, `enter`, `exit`, `cycle`, `signal_age`) from OHLCV bar data. |
-| **Backtest** | Two paths: `BarBacktest` for fast per-symbol simulation; `BacktestEngine` + `TrendSignalStrategy` for full portfolio rebalancing with NAV and trade log. Fill-aware returns in both mark-to-close and conservative conventions. |
+| **Backtest** | `BarBacktest` for fast per-symbol simulation, with fill-aware returns in both mark-to-close and conservative conventions. (A full portfolio-rebalancing engine path also exists in `hailmary.backtest` but is not yet documented in the example notebooks.) |
 | **Analytics** | `SignalTradePerformance` (each trade as one iid bet — win rate, expectancy, distribution, paths) and `SignalAllocationPerformance` (deployed-capital lens — per-symbol buy-and-hold + portfolio NAV under three capital models). `PerformanceMetrics` (Sharpe, Sortino, Calmar, VaR, CVaR, drawdown). `RiskAnalytics` (covariance, risk contribution, factor decomposition). |
 | **Factor model** | `MovingAverageTrendFactor` + `MultiFactorModel` for cross-sectional scoring. `FactorPortfolio` (quantile / score-weighted / mean-variance optimised). |
 | **Visualisation** | Interactive Plotly charts with a dark house theme. Performance tearsheet, equity curves, drawdown, monthly return heatmap, factor charts. |
@@ -65,31 +65,15 @@ alloc.portfolio_equity().plot()      # equal-weight portfolio NAV
 alloc.portfolio_metrics().summary()  # Sharpe, max drawdown, CAGR, …
 ```
 
-## Quick start — full portfolio engine
-
-```python
-from hailmary.backtest import BacktestEngine, TrendSignalStrategy
-from hailmary.viz.performance_charts import PerformanceCharts
-
-# signal_df and bars from above (with warmup fetch)
-close_df = bars["close"].unstack("symbol").loc[start:]
-
-engine = BacktestEngine(
-    prices=close_df,
-    strategy=TrendSignalStrategy(signal_df),
-    rebalance_frequency="D",
-)
-result = engine.run()
-PerformanceCharts(result).tearsheet().show()
-```
-
 ## Notebooks
 
 | Notebook | What it covers |
 |---|---|
 | `01_data_providers.ipynb` | Fetching OHLCV data via `YahooFinanceProvider`, cache, multi-symbol |
-| `04_ma200_trend_signal.ipynb` | `TrendSignal` — signal columns, look-ahead safety, entry/exit visualisation |
-| `05_bar_backtest_analytics.ipynb` | `BarBacktest` + `SignalAllocationPerformance` — returns, equity curves, drawdown, trade duration |
+| `02_ma200_trend_signal.ipynb` | `TrendSignal` — signal columns, look-ahead safety, entry/exit visualisation |
+| `03_backtest_results.ipynb` | `BarBacktest` output schema — returns, equity, trade-cycle columns |
+| `04_signal_quality.ipynb` | `SignalTradePerformance` — per-trade quality, paths, timing, return distribution, comparison harness, HTML tearsheet |
+| `05_portfolio_analytics.ipynb` | `SignalAllocationPerformance` — per-symbol equity, drawdown, portfolio NAV under three capital models |
 
 ## Project structure
 
@@ -97,7 +81,7 @@ PerformanceCharts(result).tearsheet().show()
 src/hailmary/
 ├── data/              # Market data abstraction (providers, cache, registry)
 ├── models/            # TrendSignal, MovingAverageTrendFactor, MultiFactorModel, FactorPortfolio
-├── backtest/          # BarBacktest, TrendSignalStrategy, BacktestEngine, Portfolio, ExecutionModel
+├── backtest/          # BarBacktest (primary). BacktestEngine + TrendSignalStrategy + Portfolio + ExecutionModel exist but are not yet exercised by the notebooks.
 ├── analytics/         # SignalTradePerformance, SignalAllocationPerformance, PerformanceMetrics, RiskAnalytics, FactorAnalytics
 ├── viz/               # Plotly charts (dark theme, tearsheet, factor charts)
 └── cli/               # hailmary fetch / clear-cache / info

@@ -3,18 +3,21 @@
 ## Project Overview
 
 Python-based quantitative backtesting and analytics platform focused on time-series signal
-strategies (currently MA-200 trend on crypto). The architecture has two backtest paths:
+strategies (currently MA-200 trend on crypto).
 
-- **Bar-level path** (`TrendSignal → BarBacktest → SignalTradePerformance / SignalAllocationPerformance`):
-  fast per-symbol signal simulation with fill-aware returns. Two evaluation lenses on the
-  same `BarBacktestResult` — `SignalTradePerformance` treats each entry-to-exit cycle as one
-  iid bet (no capital allocation), while `SignalAllocationPerformance` deploys capital and
-  compounds it (per-symbol buy-and-hold + portfolio NAV under three capital models).
-- **Engine path** (`TrendSignalStrategy → BacktestEngine → BacktestResult → PerformanceCharts`):
-  full portfolio rebalancing with NAV, trade log, and tearsheet.
+The active development path is the **bar-level path**
+(`TrendSignal → BarBacktest → SignalTradePerformance / SignalAllocationPerformance`):
+fast per-symbol signal simulation with fill-aware returns, evaluated through two lenses on
+the same `BarBacktestResult` — `SignalTradePerformance` treats each entry-to-exit cycle as
+one iid bet (no capital allocation), while `SignalAllocationPerformance` deploys capital
+and compounds it (per-symbol buy-and-hold + portfolio NAV under three capital models).
 
-Both paths share the same `TrendSignal` signal columns. The cross-sectional factor path
-(`MultiFactorModel → FactorPortfolio`) is kept for future multi-signal expansion.
+A full portfolio-rebalancing engine path (`TrendSignalStrategy → BacktestEngine →
+BacktestResult → PerformanceCharts`) also exists in `hailmary.backtest` but is not
+currently exercised by the example notebooks — leave it alone for now; we'll come back to
+it once the bar-level surface is settled. The cross-sectional factor path
+(`MultiFactorModel → FactorPortfolio`) is similarly retained for future multi-signal
+expansion.
 
 ## Package layout
 
@@ -67,18 +70,6 @@ alloc.portfolio_equity()                                    # equal-weight portf
 alloc.portfolio_metrics().summary()                         # Sharpe, drawdown, etc.
 ```
 
-## End-to-end pipeline (engine / portfolio)
-
-```python
-bars      = YahooFinanceProvider().get_bars(symbols, start=start, end=end)
-signal_df = TrendSignal(ma_window=200).run(bars)
-close_df  = bars["close"].unstack("symbol")
-engine    = BacktestEngine(prices=close_df, strategy=TrendSignalStrategy(signal_df),
-                           rebalance_frequency="D")
-result    = engine.run()                                   # BacktestResult
-PerformanceCharts(result).tearsheet().show()
-```
-
 ## Conventions
 
 - **Python 3.11+**, typed with mypy strict.
@@ -90,7 +81,7 @@ PerformanceCharts(result).tearsheet().show()
 - **New providers**: subclass `DataProvider`, implement `get_bars` and `get_latest_bars`, add optional import guard, register in `providers/__init__.py`.
 - **New factors**: subclass `Factor`, set `name` and `description`, implement `compute()` returning a `FactorScore`.
 - **New signals**: extend `TrendSignal` or add a new signal class with `.run(bars) -> pd.DataFrame`. Signal classes produce signal columns only — no return/execution columns. Those are added by `BarBacktest`.
-- **New strategies**: subclass `Strategy` in `backtest/strategies.py`, implement `generate_weights()`. Wire into `BacktestEngine`.
+- **Engine / strategy work is paused.** `backtest/engine.py`, `backtest/strategies.py`, and the related portfolio/execution code stay in the repo and the tests still run, but no notebooks exercise them right now. Don't add new strategies or extend the engine path until the user explicitly comes back to it.
 
 ## Available skills
 

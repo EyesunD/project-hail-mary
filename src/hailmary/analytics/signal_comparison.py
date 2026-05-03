@@ -8,7 +8,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from hailmary.analytics.signal_analytics import SignalAnalytics
+from hailmary.analytics.signal_analytics import SignalTradePerformance
 from hailmary.backtest.signal_backtest import BarBacktestResult
 from hailmary.viz.theme import PALETTE, apply_theme
 
@@ -77,8 +77,8 @@ class SignalComparison:
     ]
 
     def __init__(self, variants: dict[str, BarBacktestResult]) -> None:
-        self._analytics: dict[str, SignalAnalytics] = {
-            name: SignalAnalytics(result) for name, result in variants.items()
+        self._trades: dict[str, SignalTradePerformance] = {
+            name: SignalTradePerformance(result) for name, result in variants.items()
         }
 
     # ----------------------------------------------------------------- tables
@@ -93,7 +93,7 @@ class SignalComparison:
             DataFrame indexed by variant name with trade-quality columns.
         """
         return pd.DataFrame(
-            {name: _pool_agg(sa.trade_stats(), method) for name, sa in self._analytics.items()}
+            {name: _pool_agg(tp.trade_stats(), method) for name, tp in self._trades.items()}
         ).T
 
     def symbol_table(self, method: FillMethod = "net") -> pd.DataFrame:
@@ -106,7 +106,7 @@ class SignalComparison:
             DataFrame with two-level index ``(variant, symbol)``.
         """
         return pd.concat(
-            {name: sa.trade_summary(method=method) for name, sa in self._analytics.items()},
+            {name: tp.trade_summary(method=method) for name, tp in self._trades.items()},
             names=["variant"],
         )
 
@@ -131,7 +131,7 @@ class SignalComparison:
             :class:`plotly.graph_objects.Figure`
         """
         symbols = self._symbols()
-        variant_names = list(self._analytics.keys())
+        variant_names = list(self._trades.keys())
 
         fig = make_subplots(
             rows=3, cols=1,
@@ -166,8 +166,8 @@ class SignalComparison:
 
     def _symbols(self) -> list[str]:
         syms: set[str] = set()
-        for sa in self._analytics.values():
-            syms |= set(sa.trade_stats()["symbol"].unique())
+        for tp in self._trades.values():
+            syms |= set(tp.trade_stats()["symbol"].unique())
         return sorted(syms)
 
     def _add_pooled_table(
@@ -277,9 +277,9 @@ class SignalComparison:
         ), row=row, col=1)
 
     def _add_distribution(self, fig: go.Figure, row: int) -> None:
-        for v_idx, (name, sa) in enumerate(self._analytics.items()):
+        for v_idx, (name, tp) in enumerate(self._trades.items()):
             colour = self._COLOURS[v_idx % len(self._COLOURS)]
-            trades = sa.trade_stats()
+            trades = tp.trade_stats()
             fig.add_trace(go.Box(
                 x=trades["symbol"],
                 y=trades["return_net"],

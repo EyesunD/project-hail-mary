@@ -10,7 +10,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from hailmary.analytics.signal_analytics import SignalAnalytics, TradeQuality
+from hailmary.analytics.signal_analytics import SignalTradePerformance
 from hailmary.viz.theme import PALETTE, apply_theme
 
 _P = PALETTE
@@ -29,11 +29,6 @@ _METHOD_LABEL: dict[str, str] = {
     "net":          "Net",
     "mtc":          "MTC",
     "conservative": "Conservative",
-}
-_MODE_LABEL: dict[str, str] = {
-    "rebalanced":   "equal-weight, rebalanced daily",
-    "buy_and_hold": "equal-weight, buy & hold",
-    "fixed_stake":  "fixed stake per entry",
 }
 
 _CSS = """
@@ -194,30 +189,24 @@ class SignalTearsheet:
     Aligned Trade Paths → Return Distribution.
 
     Args:
-        analytics: :class:`~hailmary.analytics.SignalAnalytics` instance.
+        trades: :class:`~hailmary.analytics.SignalTradePerformance` instance.
         title: Heading shown at the top.
         method: Fill method(s) — string or list, default ``["net", "conservative"]``.
-        mode: Capital model (kept for API compatibility; not used in this sheet).
-        amount_per_entry: Only relevant for ``mode="fixed_stake"``.
 
     Example::
 
-        SignalTearsheet(analytics, title="MA-200 — BTC/ETH/SOL").save("ma200.html", open=True)
+        SignalTearsheet(trades, title="MA-200 — BTC/ETH/SOL").save("ma200.html", open=True)
     """
 
     def __init__(
         self,
-        analytics: SignalAnalytics,
+        trades: SignalTradePerformance,
         title: str = "Signal Tearsheet",
         method: str | list[str] = ("net", "conservative"),
-        mode: str = "rebalanced",
-        amount_per_entry: float = 1_000.0,
     ) -> None:
-        self._a = analytics
+        self._a = trades
         self._title = title
         self._methods: list[str] = [method] if isinstance(method, str) else list(method)
-        self._mode = mode
-        self._amount_per_entry = amount_per_entry
 
     # ----------------------------------------------------------------- public
 
@@ -236,7 +225,7 @@ class SignalTearsheet:
         def _chart(fig: go.Figure) -> str:
             return fig.to_html(full_html=False, include_plotlyjs=False)
 
-        paths  = TradeQuality(self._a).trade_paths()
+        paths  = self._a.trade_paths()
         ts_net = self._a.trade_summary(method="net")
         ts_con = self._a.trade_summary(method="conservative")
 
@@ -394,14 +383,14 @@ class SignalTearsheet:
                 }
                 for m in _METRICS:
                     r[m] = float(ts.loc[sym, m])
-                flags = TradeQuality.quality_flags(
+                flags = SignalTradePerformance.quality_flags(
                     r["expectancy"], r["expectancy_ex_top"],
                     r["median_return"], r["skewness"],
                     net_expectancy=float(ts_net.loc[sym, "expectancy"]) if method_key == "conservative" else None,
                     net_median=float(ts_net.loc[sym, "median_return"]) if method_key == "conservative" else None,
                 )
                 r["flags"] = self._outlier_flag_html(flags)
-                r.update(TradeQuality.d5_stats(sym, method_key, paths))
+                r.update(SignalTradePerformance.d5_stats(sym, method_key, paths))
                 rows.append(r)
 
         exp_bound = max(
@@ -804,7 +793,7 @@ class SignalTearsheet:
 
     @staticmethod
     def _outlier_flag_html(flags: dict[str, bool]) -> str:
-        """Render a :meth:`TradeQuality.quality_flags` result as an HTML string."""
+        """Render a :meth:`SignalTradePerformance.quality_flags` result as an HTML string."""
         parts: list[str] = []
         if flags["median_negative"]:
             parts.append("&#x26a0; median &lt; 0")

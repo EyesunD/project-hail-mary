@@ -5,8 +5,11 @@
 Python-based quantitative backtesting and analytics platform focused on time-series signal
 strategies (currently MA-200 trend on crypto). The architecture has two backtest paths:
 
-- **Bar-level path** (`TrendSignal → BarBacktest → SignalAnalytics`): fast per-symbol
-  signal simulation with fill-aware returns and portfolio-level equity/metrics.
+- **Bar-level path** (`TrendSignal → BarBacktest → SignalTradePerformance / SignalAllocationPerformance`):
+  fast per-symbol signal simulation with fill-aware returns. Two evaluation lenses on the
+  same `BarBacktestResult` — `SignalTradePerformance` treats each entry-to-exit cycle as one
+  iid bet (no capital allocation), while `SignalAllocationPerformance` deploys capital and
+  compounds it (per-symbol buy-and-hold + portfolio NAV under three capital models).
 - **Engine path** (`TrendSignalStrategy → BacktestEngine → BacktestResult → PerformanceCharts`):
   full portfolio rebalancing with NAV, trade log, and tearsheet.
 
@@ -35,7 +38,7 @@ src/hailmary/
 │   └── execution.py     # ExecutionModel, SlippageModel, CommissionModel
 ├── analytics/      # Risk & performance analytics
 │   ├── metrics.py        # PerformanceMetrics (Sharpe, Sortino, Calmar, VaR, …)
-│   ├── signal_analytics.py # SignalAnalytics — per-symbol + portfolio stats from BarBacktest
+│   ├── signal_analytics.py # SignalTradePerformance (iid bets) + SignalAllocationPerformance (deployed capital)
 │   ├── risk.py           # RiskAnalytics (covariance, risk contribution, factor decomp)
 │   └── statistics.py     # FactorAnalytics (IC, quintile returns, decay)
 ├── viz/            # Plotly visualisations
@@ -48,13 +51,20 @@ src/hailmary/
 ## End-to-end pipeline (bar-level)
 
 ```python
-bars      = YahooFinanceProvider().get_bars(symbols, start=start, end=end)
-signal_df = TrendSignal(ma_window=200).run(bars)          # signal columns
-bt_result = BarBacktest().run(signal_df)                   # execution + returns
-analytics = SignalAnalytics(bt_result)
-analytics.summary()                                        # per-symbol stats
-analytics.portfolio_equity()                               # equal-weight portfolio NAV
-analytics.portfolio_metrics().summary()                    # Sharpe, drawdown, etc.
+bars       = YahooFinanceProvider().get_bars(symbols, start=start, end=end)
+signal_df  = TrendSignal(ma_window=200).run(bars)          # signal columns
+bt_result  = BarBacktest().run(signal_df)                   # execution + returns
+
+# Trade-level lens — each entry→exit cycle as one iid bet
+trade_perf = SignalTradePerformance(bt_result)
+trade_perf.trade_summary()                                  # win rate, expectancy, profit factor, …
+trade_perf.trade_paths()                                    # per-trade cumulative-return paths
+
+# Allocation-level lens — capital deployed and compounded
+alloc      = SignalAllocationPerformance(bt_result)
+alloc.summary()                                             # per-symbol returns, drawdown, % invested
+alloc.portfolio_equity()                                    # equal-weight portfolio NAV
+alloc.portfolio_metrics().summary()                         # Sharpe, drawdown, etc.
 ```
 
 ## End-to-end pipeline (engine / portfolio)

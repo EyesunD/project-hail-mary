@@ -11,7 +11,7 @@ designed to support multiple signals as the system grows.
 | **Data** | Abstract `DataProvider` with Yahoo Finance, Alpaca, Polygon, and CSV backends. Priority-based registry with automatic failover. Parquet disk cache. |
 | **Signals** | `TrendSignal` — generates look-ahead-safe signal columns (`ma`, `signal_open`, `enter`, `exit`, `cycle`, `signal_age`) from OHLCV bar data. |
 | **Backtest** | Two paths: `BarBacktest` for fast per-symbol simulation; `BacktestEngine` + `TrendSignalStrategy` for full portfolio rebalancing with NAV and trade log. Fill-aware returns in both mark-to-close and conservative conventions. |
-| **Analytics** | `SignalAnalytics` for per-symbol and equal-weight portfolio stats. `PerformanceMetrics` (Sharpe, Sortino, Calmar, VaR, CVaR, drawdown). `RiskAnalytics` (covariance, risk contribution, factor decomposition). |
+| **Analytics** | `SignalTradePerformance` (each trade as one iid bet — win rate, expectancy, distribution, paths) and `SignalAllocationPerformance` (deployed-capital lens — per-symbol buy-and-hold + portfolio NAV under three capital models). `PerformanceMetrics` (Sharpe, Sortino, Calmar, VaR, CVaR, drawdown). `RiskAnalytics` (covariance, risk contribution, factor decomposition). |
 | **Factor model** | `MovingAverageTrendFactor` + `MultiFactorModel` for cross-sectional scoring. `FactorPortfolio` (quantile / score-weighted / mean-variance optimised). |
 | **Visualisation** | Interactive Plotly charts with a dark house theme. Performance tearsheet, equity curves, drawdown, monthly return heatmap, factor charts. |
 | **CLI** | `hailmary fetch / clear-cache / info` |
@@ -38,7 +38,10 @@ import pandas as pd
 from hailmary.data.providers import YahooFinanceProvider
 from hailmary.models import TrendSignal
 from hailmary.backtest.signal_backtest import BarBacktest
-from hailmary.analytics.signal_analytics import SignalAnalytics
+from hailmary.analytics.signal_analytics import (
+    SignalAllocationPerformance,
+    SignalTradePerformance,
+)
 
 signal = TrendSignal(ma_window=200)
 yahoo  = YahooFinanceProvider()
@@ -51,11 +54,15 @@ bars = yahoo.get_bars(["BTC-USD", "ETH-USD", "SOL-USD"], start=fetch_start, end=
 
 signal_df = signal.run(bars, trim_start=start)
 bt_result = BarBacktest().run(signal_df)
-analytics = SignalAnalytics(bt_result)
 
-analytics.summary()                      # per-symbol returns, entries, % invested
-analytics.portfolio_equity().plot()      # equal-weight portfolio NAV
-analytics.portfolio_metrics().summary()  # Sharpe, max drawdown, CAGR, …
+# Trade-level lens — each entry→exit cycle as one iid bet
+SignalTradePerformance(bt_result).trade_summary()  # win rate, expectancy, profit factor, …
+
+# Allocation-level lens — capital deployed and compounded
+alloc = SignalAllocationPerformance(bt_result)
+alloc.summary()                      # per-symbol returns, entries, % invested
+alloc.portfolio_equity().plot()      # equal-weight portfolio NAV
+alloc.portfolio_metrics().summary()  # Sharpe, max drawdown, CAGR, …
 ```
 
 ## Quick start — full portfolio engine
@@ -82,7 +89,7 @@ PerformanceCharts(result).tearsheet().show()
 |---|---|
 | `01_data_providers.ipynb` | Fetching OHLCV data via `YahooFinanceProvider`, cache, multi-symbol |
 | `04_ma200_trend_signal.ipynb` | `TrendSignal` — signal columns, look-ahead safety, entry/exit visualisation |
-| `05_bar_backtest_analytics.ipynb` | `BarBacktest` + `SignalAnalytics` — returns, equity curves, drawdown, trade duration |
+| `05_bar_backtest_analytics.ipynb` | `BarBacktest` + `SignalAllocationPerformance` — returns, equity curves, drawdown, trade duration |
 
 ## Project structure
 
@@ -91,7 +98,7 @@ src/hailmary/
 ├── data/              # Market data abstraction (providers, cache, registry)
 ├── models/            # TrendSignal, MovingAverageTrendFactor, MultiFactorModel, FactorPortfolio
 ├── backtest/          # BarBacktest, TrendSignalStrategy, BacktestEngine, Portfolio, ExecutionModel
-├── analytics/         # SignalAnalytics, PerformanceMetrics, RiskAnalytics, FactorAnalytics
+├── analytics/         # SignalTradePerformance, SignalAllocationPerformance, PerformanceMetrics, RiskAnalytics, FactorAnalytics
 ├── viz/               # Plotly charts (dark theme, tearsheet, factor charts)
 └── cli/               # hailmary fetch / clear-cache / info
 

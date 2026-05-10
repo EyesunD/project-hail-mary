@@ -1,0 +1,581 @@
+{
+  "statement_date": "2026-04-01",
+  "currency": "SGD",
+  "portfolios": [
+    {
+      "name": "BlackRock",
+      "total_value": 2864.06,
+      "holdings": [
+        {
+          "stashaway_id": "ISAC",
+          "weight": 0.047105,
+          "value": 134.91
+        },
+        {
+          "stashaway_id": "IDTM",
+          "weight": 0.018209,
+          "value": 52.15
+        },
+        {
+          "stashaway_id": "IDTL",
+          "weight": 0.038572,
+          "value": 110.47
+        },
+        {
+          "stashaway_id": "CSUS",
+          "weight": 0.173369,
+          "value": 496.54
+        },
+        {
+          "stashaway_id": "IJPA",
+          "weight": 0.039213,
+          "value": 112.31
+        },
+        {
+          "stashaway_id": "ISFD",
+          "weight": 0.010563,
+          "value": 30.25
+        },
+        {
+          "stashaway_id": "CCAU",
+          "weight": 0.031051,
+          "value": 88.93
+        },
+        {
+          "stashaway_id": "IGLN",
+          "weight": 0.025952,
+          "value": 74.33
+        },
+        {
+          "stashaway_id": "ICHN",
+          "weight": 0.025628,
+          "value": 73.4
+        },
+        {
+          "stashaway_id": "IMBS",
+          "weight": 0.025622,
+          "value": 73.38
+        },
+        {
+          "stashaway_id": "IEMB",
+          "weight": 0.007713,
+          "value": 22.09
+        },
+        {
+          "stashaway_id": "CSPX",
+          "weight": 0.173273,
+          "value": 496.27
+        },
+        {
+          "stashaway_id": "CPXJ",
+          "weight": 0.010488,
+          "value": 30.04
+        },
+        {
+          "stashaway_id": "CEUU",
+          "weight": 0.05298,
+          "value": 151.74
+        },
+        {
+          "stashaway_id": "EXCH",
+          "weight": 0.083122,
+          "value": 238.07
+        },
+        {
+          "stashaway_id": "IJPD",
+          "weight": 0.009099,
+          "value": 26.06
+        },
+        {
+          "stashaway_id": "SASU",
+          "weight": 0.106469,
+          "value": 304.93
+        },
+        {
+          "stashaway_id": "TIP5",
+          "weight": 0.035338,
+          "value": 101.21
+        },
+        {
+          "stashaway_id": "IUIS",
+          "weight": 0.009513,
+          "value": 27.25
+        },
+        {
+          "stashaway_id": "IBTU",
+          "weight": 0.014682,
+          "value": 42.05
+        },
+        {
+          "stashaway_id": "CASH_USD",
+          "weight": 0.062039,
+          "value": 177.68
+        }
+      ]
+    },
+    {
+      "name": "Energy",
+      "total_value": 600.95,
+      "holdings": [
+        {
+          "stashaway_id": "XLE",
+          "weight": 0.999872,
+          "value": 600.88
+        },
+        {
+          "stashaway_id": "CASH_USD",
+          "weight": 0.000128,
+          "value": 0.08
+        }
+      ]
+    },
+    {
+      "name": "General Investing",
+      "total_value": 27160.16,
+      "holdings": [
+        {
+          "stashaway_id": "BBJP",
+          "weight": 0.017233,
+          "value": 468.06
+        },
+        {
+          "stashaway_id": "DXJ",
+          "weight": 0.043857,
+          "value": 1191.15
+        },
+        {
+          "stashaway_id": "FBTC",
+          "weight": 0.058297,
+          "value": 1583.35
+        },
+        {
+          "stashaway_id": "FETH",
+          "weight": 0.057148,
+          "value": 1552.14
+        },
+        {
+          "stashaway_id": "FLIN",
+          "weight": 0.025587,
+          "value": 694.96
+        },
+        {
+          "stashaway_id": "GLDM",
+          "weight": 0.052597,
+          "value": 1428.54
+        },
+        {
+          "stashaway_id": "ISAC",
+          "weight": 0.161761,
+          "value": 4393.45
+        },
+        {
+          "stashaway_id": "IVV",
+          "weight": 0.118243,
+          "value": 3211.51
+        },
+        {
+          "stashaway_id": "PPA",
+          "weight": 0.025876,
+          "value": 702.79
+        },
+        {
+          "stashaway_id": "RSP",
+          "weight": 0.053951,
+          "value": 1465.33
+        },
+        {
+          "stashaway_id": "SPEM",
+          "weight": 0.040075,
+          "value": 1088.45
+        },
+        {
+          "stashaway_id": "VEU",
+          "weight": 0.126921,
+          "value": 3447.21
+        },
+        {
+          "stashaway_id": "XLE",
+          "weight": 0.018671,
+          "value": 507.11
+        },
+        {
+          "stashaway_id": "XLI",
+          "weight": 0.033361,
+          "value": 906.08
+        },
+        {
+          "stashaway_id": "XLK",
+          "weight": 0.065809,
+          "value": 1787.38
+        },
+        {
+          "stashaway_id": "XLP",
+          "weight": 0.041286,
+          "value": 1121.35
+        },
+        {
+          "stashaway_id": "XLV",
+          "weight": 0.031656,
+          "value": 859.77
+        },
+        {
+          "stashaway_id": "XLY",
+          "weight": 0.017786,
+          "value": 483.07
+        },
+        {
+          "stashaway_id": "CASH_USD",
+          "weight": 0.009885,
+          "value": 268.48
+        }
+      ]
+    },
+    {
+      "name": "Simple USD",
+      "total_value": 20043.86,
+      "holdings": [
+        {
+          "stashaway_id": "BB3M",
+          "weight": 0.999998,
+          "value": 20043.82
+        },
+        {
+          "stashaway_id": "CASH_USD",
+          "weight": 2e-06,
+          "value": 0.04
+        },
+        {
+          "stashaway_id": "CASH_SGD",
+          "weight": 0.0,
+          "value": 0.0
+        }
+      ]
+    },
+    {
+      "name": "Singapore Investing",
+      "total_value": 1460.49,
+      "holdings": [
+        {
+          "stashaway_id": "A35",
+          "weight": 0.241108,
+          "value": 352.14
+        },
+        {
+          "stashaway_id": "CLR",
+          "weight": 0.118406,
+          "value": 172.93
+        },
+        {
+          "stashaway_id": "G3B",
+          "weight": 0.16755,
+          "value": 244.7
+        },
+        {
+          "stashaway_id": "MBH",
+          "weight": 0.181081,
+          "value": 264.47
+        },
+        {
+          "stashaway_id": "MMS",
+          "weight": 0.120417,
+          "value": 175.87
+        },
+        {
+          "stashaway_id": "QL3",
+          "weight": 0.16143,
+          "value": 235.77
+        },
+        {
+          "stashaway_id": "CASH_SGD",
+          "weight": 0.010008,
+          "value": 14.62
+        }
+      ]
+    },
+    {
+      "name": "Utilities",
+      "total_value": 286.05,
+      "holdings": [
+        {
+          "stashaway_id": "XLU",
+          "weight": 0.999982,
+          "value": 286.05
+        },
+        {
+          "stashaway_id": "CASH_USD",
+          "weight": 1.8e-05,
+          "value": 0.01
+        }
+      ]
+    },
+    {
+      "name": "Income Investing",
+      "total_value": 366.66,
+      "holdings": [
+        {
+          "stashaway_id": "JINAASH",
+          "weight": 0.285756,
+          "value": 104.77
+        },
+        {
+          "stashaway_id": "JPEMDSG",
+          "weight": 0.170097,
+          "value": 62.37
+        },
+        {
+          "stashaway_id": "JPGCBAS",
+          "weight": 0.098408,
+          "value": 36.08
+        },
+        {
+          "stashaway_id": "JPGHYHS",
+          "weight": 0.149016,
+          "value": 54.64
+        },
+        {
+          "stashaway_id": "JPMGASA",
+          "weight": 0.287078,
+          "value": 105.26
+        },
+        {
+          "stashaway_id": "CASH_SGD",
+          "weight": 0.009645,
+          "value": 3.54
+        }
+      ]
+    },
+    {
+      "name": "High Dividend Yield",
+      "total_value": 1744.22,
+      "holdings": [
+        {
+          "stashaway_id": "VYM",
+          "weight": 0.999908,
+          "value": 1744.06
+        },
+        {
+          "stashaway_id": "CASH_USD",
+          "weight": 9.2e-05,
+          "value": 0.16
+        }
+      ]
+    },
+    {
+      "name": "Ex-US Large-cap",
+      "total_value": 574.88,
+      "holdings": [
+        {
+          "stashaway_id": "VEU",
+          "weight": 0.999992,
+          "value": 574.88
+        },
+        {
+          "stashaway_id": "CASH_USD",
+          "weight": 8e-06,
+          "value": 0.0
+        }
+      ]
+    },
+    {
+      "name": "SG ETF",
+      "total_value": 721.1,
+      "holdings": [
+        {
+          "stashaway_id": "G3B",
+          "weight": 0.999996,
+          "value": 721.09
+        },
+        {
+          "stashaway_id": "CASH_SGD",
+          "weight": 4e-06,
+          "value": 0.0
+        }
+      ]
+    },
+    {
+      "name": "Nasdaq Covered Call",
+      "total_value": 576.82,
+      "holdings": [
+        {
+          "stashaway_id": "JEPQ",
+          "weight": 0.999999,
+          "value": 576.81
+        },
+        {
+          "stashaway_id": "CASH_USD",
+          "weight": 1e-06,
+          "value": 0.0
+        }
+      ]
+    },
+    {
+      "name": "Cash Pool A",
+      "total_value": 5318.19,
+      "holdings": [
+        {
+          "stashaway_id": "LNWELIA",
+          "weight": 0.70003,
+          "value": 3722.89
+        },
+        {
+          "stashaway_id": "OCBSGDM",
+          "weight": 0.29997,
+          "value": 1595.3
+        },
+        {
+          "stashaway_id": "CASH_SGD",
+          "weight": 0.0,
+          "value": 0.0
+        }
+      ]
+    },
+    {
+      "name": "Simple SGD",
+      "total_value": 142721.56,
+      "holdings": [
+        {
+          "stashaway_id": "LNWELIA",
+          "weight": 0.700004,
+          "value": 99905.65
+        },
+        {
+          "stashaway_id": "OCBSGDM",
+          "weight": 0.299996,
+          "value": 42815.91
+        },
+        {
+          "stashaway_id": "CASH_SGD",
+          "weight": 0.0,
+          "value": 0.0
+        }
+      ]
+    },
+    {
+      "name": "General SRS",
+      "total_value": 7405.03,
+      "holdings": [
+        {
+          "stashaway_id": "BBJP",
+          "weight": 0.017911,
+          "value": 132.63
+        },
+        {
+          "stashaway_id": "DXJ",
+          "weight": 0.046421,
+          "value": 343.75
+        },
+        {
+          "stashaway_id": "FBTC",
+          "weight": 0.053254,
+          "value": 394.35
+        },
+        {
+          "stashaway_id": "FETH",
+          "weight": 0.0484,
+          "value": 358.4
+        },
+        {
+          "stashaway_id": "FLIN",
+          "weight": 0.023616,
+          "value": 174.88
+        },
+        {
+          "stashaway_id": "GLDM",
+          "weight": 0.055251,
+          "value": 409.13
+        },
+        {
+          "stashaway_id": "ISAC",
+          "weight": 0.162436,
+          "value": 1202.84
+        },
+        {
+          "stashaway_id": "IVV",
+          "weight": 0.119524,
+          "value": 885.08
+        },
+        {
+          "stashaway_id": "PPA",
+          "weight": 0.026606,
+          "value": 197.02
+        },
+        {
+          "stashaway_id": "RSP",
+          "weight": 0.054901,
+          "value": 406.54
+        },
+        {
+          "stashaway_id": "SPEM",
+          "weight": 0.042052,
+          "value": 311.4
+        },
+        {
+          "stashaway_id": "VEU",
+          "weight": 0.132708,
+          "value": 982.71
+        },
+        {
+          "stashaway_id": "XLE",
+          "weight": 0.015865,
+          "value": 117.48
+        },
+        {
+          "stashaway_id": "XLI",
+          "weight": 0.035537,
+          "value": 263.15
+        },
+        {
+          "stashaway_id": "XLK",
+          "weight": 0.066555,
+          "value": 492.84
+        },
+        {
+          "stashaway_id": "XLP",
+          "weight": 0.042605,
+          "value": 315.49
+        },
+        {
+          "stashaway_id": "XLV",
+          "weight": 0.02915,
+          "value": 215.85
+        },
+        {
+          "stashaway_id": "XLY",
+          "weight": 0.017339,
+          "value": 128.4
+        },
+        {
+          "stashaway_id": "CASH_USD",
+          "weight": 0.009869,
+          "value": 73.08
+        }
+      ]
+    },
+    {
+      "name": "Crypto",
+      "total_value": 4006.09,
+      "holdings": [
+        {
+          "stashaway_id": "FBTC",
+          "weight": 0.505874,
+          "value": 2026.58
+        },
+        {
+          "stashaway_id": "FETH",
+          "weight": 0.484125,
+          "value": 1939.45
+        },
+        {
+          "stashaway_id": "CASH_USD",
+          "weight": 6e-05,
+          "value": 0.24
+        },
+        {
+          "stashaway_id": "CASH_SGD",
+          "weight": 0.009942,
+          "value": 39.83
+        }
+      ]
+    }
+  ]
+}

@@ -158,9 +158,28 @@ class YahooFinanceProvider(DataProvider):
     @staticmethod
     def _normalise(raw: pd.DataFrame, symbols: list[str]) -> pd.DataFrame:
         """Convert yfinance's wide MultiIndex output to (symbol, timestamp) MultiIndex."""
+        # yfinance column shapes:
+        #   - flat (older versions, single symbol): ['Open', 'High', 'Low', 'Close', 'Volume']
+        #   - MultiIndex with group_by='ticker' (multi symbol): [('SPY', 'Open'), ...]
+        #   - MultiIndex without group_by (newer single symbol): [('Open', 'SPY'), ...]
+        # Detect which level holds tickers by intersecting with our request list.
+        ticker_level: int | None = None
+        if isinstance(raw.columns, pd.MultiIndex):
+            for lvl in range(raw.columns.nlevels):
+                level_vals = set(raw.columns.get_level_values(lvl))
+                if level_vals & set(symbols):
+                    ticker_level = lvl
+                    break
+
         frames = []
         for sym in symbols:
-            if len(symbols) == 1:
+            if ticker_level is not None:
+                if sym in raw.columns.get_level_values(ticker_level):
+                    sym_df = raw.xs(sym, axis=1, level=ticker_level).copy()
+                else:
+                    logger.warning("Symbol {} not in response — skipping.", sym)
+                    continue
+            elif len(symbols) == 1:
                 sym_df = raw.copy()
             else:
                 try:
@@ -168,7 +187,7 @@ class YahooFinanceProvider(DataProvider):
                 except KeyError:
                     logger.warning("Symbol {} not in response — skipping.", sym)
                     continue
-            sym_df.columns = [c.lower() for c in sym_df.columns]
+            sym_df.columns = [str(c).lower() for c in sym_df.columns]
             sym_df = sym_df[["open", "high", "low", "close", "volume"]].dropna(how="all")
             sym_df.index = pd.to_datetime(sym_df.index)
             sym_df.index.name = "timestamp"

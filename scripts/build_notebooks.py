@@ -1,0 +1,410 @@
+"""Generate the three allocation notebooks via nbformat.
+
+Idempotent: re-running overwrites notebooks/01_validate_holdings.ipynb,
+notebooks/02_validate_returns.ipynb, notebooks/03_allocation_diagnostic.ipynb.
+Outputs are not pre-executed here; users open them in JupyterLab.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import nbformat as nbf
+
+
+def md(src: str) -> nbf.NotebookNode:
+    return nbf.v4.new_markdown_cell(src)
+
+
+def code(src: str) -> nbf.NotebookNode:
+    return nbf.v4.new_code_cell(src)
+
+
+def write_notebook(path: Path, cells: list[nbf.NotebookNode]) -> None:
+    nb = nbf.v4.new_notebook()
+    nb.cells = cells
+    nb.metadata.update(
+        {
+            "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+            "language_info": {"name": "python", "version": "3.11"},
+        }
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    nbf.write(nb, str(path))
+    print(f"Wrote {path}")
+
+
+# ---------------------------------------------------------------------------
+# Notebook 01 — validate holdings
+# ---------------------------------------------------------------------------
+
+NB01 = [
+    md(
+        "# 01 — Validate parsed holdings\n"
+        "\n"
+        "Parse the latest Stashaway statement, apply role tags from `book_config`,\n"
+        "and check that every parsed portfolio reconciles cleanly against the\n"
+        "weight-sum tolerance and resolves against the universe map.\n"
+        "\n"
+        "**Inputs:** `data/statements/<latest>.pdf`\n"
+        "\n"
+        "**Outputs:** a summary table; a per-portfolio holdings table; a list of any\n"
+        "unmapped tickers that need adding to `STASHAWAY_UNIVERSE`.\n"
+    ),
+    code(
+        "from pathlib import Path\n"
+        "import pandas as pd\n"
+        "\n"
+        "from hailmary.allocation.book_config import ROLES\n"
+        "from hailmary.allocation.portfolios import Role, from_parsed\n"
+        "from hailmary.allocation.statements import parse_statement\n"
+        "\n"
+        "STATEMENT_PATH = Path('../../data/statements/2026-04 StashAway Monthly Statement.pdf')\n"
+        "assert STATEMENT_PATH.exists(), f'Statement not found at {STATEMENT_PATH}'"
+    ),
+    md("## Parse the statement"),
+    code(
+        "parsed = parse_statement(STATEMENT_PATH, use_cache=False)\n"
+        "print(f'Parsed {len(parsed)} portfolios from {STATEMENT_PATH.name}')\n"
+        "print(f'Statement date: {parsed[0].statement_date}')"
+    ),
+    md(
+        "## Reconcile weights\n"
+        "\n"
+        "Each portfolio's weights should sum to 1.0 ± 1e-4. If any fail, the parser\n"
+        "raised inside `parse_statement`; this cell is a final visual check."
+    ),
+    code(
+        "rows = [\n"
+        "    {\n"
+        "        'name': pf.name,\n"
+        "        'currency': pf.currency,\n"
+        "        'total_value': pf.total_value,\n"
+        "        'n_holdings': len(pf.holdings),\n"
+        "        'weight_sum': sum(h.weight for h in pf.holdings),\n"
+        "    }\n"
+        "    for pf in parsed\n"
+        "]\n"
+        "summary = pd.DataFrame(rows).sort_values('total_value', ascending=False)\n"
+        "summary"
+    ),
+    md(
+        "## Apply role tags and resolve universe\n"
+        "\n"
+        "`from_parsed` looks each holding up in `STASHAWAY_UNIVERSE`. An\n"
+        "`UnknownAssetError` here means a ticker needs adding to the map."
+    ),
+    code(
+        "portfolios = []\n"
+        "missing_roles = []\n"
+        "for pf in parsed:\n"
+        "    roles = ROLES.get(pf.name)\n"
+        "    if roles is None:\n"
+        "        missing_roles.append(pf.name)\n"
+        "        continue\n"
+        "    portfolios.append(from_parsed(pf, roles=roles))\n"
+        "\n"
+        "if missing_roles:\n"
+        "    print('Portfolios with no role tag (edit book_config.ROLES):')\n"
+        "    for n in missing_roles:\n"
+        "        print(f'  - {n!r}')\n"
+        "else:\n"
+        "    print(f'All {len(portfolios)} portfolios resolved against the universe map.')"
+    ),
+    md("## Diagnostic vs hidden portfolios"),
+    code(
+        "diag_rows = [\n"
+        "    {\n"
+        "        'name': p.name,\n"
+        "        'roles': ','.join(sorted(r.value for r in p.roles)),\n"
+        "        'currency': p.currency,\n"
+        "        'total_value': p.total_value,\n"
+        "        'n_holdings': len(p.holdings),\n"
+        "    }\n"
+        "    for p in portfolios\n"
+        "]\n"
+        "diag = pd.DataFrame(diag_rows)\n"
+        "in_diag = diag[diag['roles'].str.contains('holding')]\n"
+        "hidden = diag[~diag['roles'].str.contains('holding')]\n"
+        "print(f'In diagnostic ({len(in_diag)}):')\n"
+        "display(in_diag.sort_values('total_value', ascending=False))\n"
+        "print(f'Hidden ({len(hidden)}):')\n"
+        "display(hidden)"
+    ),
+    md("## Detailed holdings — first three portfolios"),
+    code(
+        "for p in portfolios[:3]:\n"
+        "    print(f'\\n=== {p.name} ({p.currency}) — total {p.total_value:,.2f} ===')\n"
+        "    rows = [\n"
+        "        {\n"
+        "            'stashaway_id': h.stashaway_id,\n"
+        "            'yahoo_ticker': h.metadata.ticker,\n"
+        "            'asset_class': h.metadata.asset_class,\n"
+        "            'region': h.metadata.region,\n"
+        "            'sector': h.metadata.sector,\n"
+        "            'weight': h.weight,\n"
+        "            'value': h.value,\n"
+        "        }\n"
+        "        for h in p.holdings\n"
+        "    ]\n"
+        "    display(pd.DataFrame(rows))"
+    ),
+    md(
+        "## Final assertion\n"
+        "\n"
+        "If any of these fail, the rest of the diagnostic pipeline can't trust the\n"
+        "input — fix before running notebooks 02 and 03."
+    ),
+    code(
+        "from hailmary.allocation.portfolios import Role\n"
+        "\n"
+        "assert len(portfolios) == 15, f'Expected 15 portfolios, got {len(portfolios)}'\n"
+        "for p in portfolios:\n"
+        "    assert abs(sum(h.weight for h in p.holdings) - 1.0) < 1e-4, p.name\n"
+        "managed = [p for p in portfolios if Role.MANAGED_BENCHMARK in p.roles]\n"
+        "assert len(managed) >= 1, 'No MANAGED_BENCHMARK portfolios — diagnostic will skip benchmark deltas'\n"
+        "print('All checks passed — proceed to notebook 02 / 03.')"
+    ),
+]
+
+# ---------------------------------------------------------------------------
+# Notebook 02 — validate returns
+# ---------------------------------------------------------------------------
+
+NB02 = [
+    md(
+        "# 02 — Reconstruct portfolio returns\n"
+        "\n"
+        "Pull historical returns for every tradeable ticker via `YahooFinanceProvider`,\n"
+        "then reconstruct each portfolio's daily return series using *current weights\n"
+        "× historical underlying-asset returns* (design D2).\n"
+        "\n"
+        "**Caveat (forward-looking, not realised):** the reconstructed series is what\n"
+        "*today's* book *would have* returned over history — it's not a real track\n"
+        "record. Stashaway statements don't expose a NAV history we could reconcile\n"
+        "against, so this notebook is a sanity check that returns reconstruction works,\n"
+        "not a backtest.\n"
+    ),
+    code(
+        "from datetime import date\n"
+        "from pathlib import Path\n"
+        "import warnings\n"
+        "\n"
+        "import pandas as pd\n"
+        "import plotly.graph_objects as go\n"
+        "\n"
+        "from hailmary.allocation.book_config import ROLES\n"
+        "from hailmary.allocation.portfolios import Role, from_parsed\n"
+        "from hailmary.allocation.returns import portfolio_returns\n"
+        "from hailmary.allocation.statements import parse_statement\n"
+        "from hailmary.data.providers import YahooFinanceProvider\n"
+        "from hailmary.viz.theme import apply_theme\n"
+        "\n"
+        "STATEMENT_PATH = Path('../../data/statements/2026-04 StashAway Monthly Statement.pdf')\n"
+        "START = date(2022, 1, 1)\n"
+        "END = date.today()"
+    ),
+    md("## Parse + resolve"),
+    code(
+        "parsed = parse_statement(STATEMENT_PATH, use_cache=False)\n"
+        "portfolios = [\n"
+        "    from_parsed(pf, roles=ROLES[pf.name])\n"
+        "    for pf in parsed if pf.name in ROLES\n"
+        "]\n"
+        "holding = [p for p in portfolios if Role.HOLDING in p.roles]\n"
+        "print(f'{len(portfolios)} portfolios resolved, {len(holding)} tagged HOLDING')"
+    ),
+    md(
+        "## Fetch returns for the diagnostic universe\n"
+        "\n"
+        "Pull every Yahoo-resolvable ticker across HOLDING portfolios in one call so\n"
+        "the cache key is shared across portfolios."
+    ),
+    code(
+        "provider = YahooFinanceProvider()\n"
+        "tickers = sorted({\n"
+        "    h.metadata.ticker for p in holding for h in p.holdings\n"
+        "    if not h.metadata.ticker.startswith('CASH_')\n"
+        "})\n"
+        "print(f'Fetching {len(tickers)} unique tickers from Yahoo ({START} → {END})')\n"
+        "returns = provider.get_returns(tickers, START, END)\n"
+        "print(f'Returns panel: {returns.shape[0]} dates × {returns.shape[1]} tickers')\n"
+        "missing = sorted(set(tickers) - set(returns.columns))\n"
+        "if missing:\n"
+        "    print(f'\\nTickers with NO Yahoo data: {missing}')\n"
+        "    print('These holdings will be excluded from return reconstruction; consider mapping to a different proxy in universe.py.')"
+    ),
+    md("## Reconstruct one return series per portfolio"),
+    code(
+        "import warnings\n"
+        "with warnings.catch_warnings():\n"
+        "    warnings.simplefilter('ignore', UserWarning)\n"
+        "    series = []\n"
+        "    failed = []\n"
+        "    for p in holding:\n"
+        "        try:\n"
+        "            s = portfolio_returns(p, returns=returns)\n"
+        "            series.append(s)\n"
+        "        except Exception as exc:\n"
+        "            failed.append((p.name, str(exc)))\n"
+        "\n"
+        "panel = pd.concat(series, axis=1) if series else pd.DataFrame()\n"
+        "print(f'Reconstructed {len(series)} portfolio return series across {panel.shape[0]} dates')\n"
+        "if failed:\n"
+        "    print('\\nFailed:')\n"
+        "    for n, e in failed:\n"
+        "        print(f'  {n}: {e}')"
+    ),
+    md("## Summary stats"),
+    code(
+        "from hailmary.analytics.metrics import PerformanceMetrics\n"
+        "stats = []\n"
+        "common = panel.dropna(how='any')\n"
+        "for col in common.columns:\n"
+        "    m = PerformanceMetrics(common[col])\n"
+        "    stats.append({\n"
+        "        'portfolio': col,\n"
+        "        'ann_return': m.annualised_return,\n"
+        "        'ann_vol': m.annualised_vol,\n"
+        "        'sharpe': m.sharpe,\n"
+        "        'max_dd': m.max_drawdown,\n"
+        "    })\n"
+        "stats_df = pd.DataFrame(stats).set_index('portfolio').sort_values('sharpe', ascending=False)\n"
+        "stats_df.style.format({\n"
+        "    'ann_return': '{:.2%}', 'ann_vol': '{:.2%}', 'sharpe': '{:.2f}', 'max_dd': '{:.2%}'\n"
+        "})"
+    ),
+    md("## Cumulative-return chart"),
+    code(
+        "cum = (1 + common).cumprod() - 1\n"
+        "fig = go.Figure()\n"
+        "for col in cum.columns:\n"
+        "    fig.add_trace(go.Scatter(x=cum.index, y=cum[col], mode='lines', name=col))\n"
+        "fig.update_layout(yaxis_tickformat='.0%')\n"
+        "apply_theme(fig, title='Reconstructed cumulative returns', height=520)"
+    ),
+    md(
+        "## Tracking-error placeholder\n"
+        "\n"
+        "Stashaway statements don't expose a NAV history per portfolio, so we can't\n"
+        "compute a real tracking error against the parser's reconstruction. If a NAV\n"
+        "feed becomes available later, plot `(reconstructed - actual)` here."
+    ),
+]
+
+# ---------------------------------------------------------------------------
+# Notebook 03 — full diagnostic + HTML export
+# ---------------------------------------------------------------------------
+
+NB03 = [
+    md(
+        "# 03 — Allocation diagnostic\n"
+        "\n"
+        "Run all five diagnostic sections (combined-book exposure, correlation,\n"
+        "redundancy, risk contribution, benchmark comparison) on the resolved book\n"
+        "and export `reports/allocation_diagnostic.html`.\n"
+    ),
+    code(
+        "from datetime import date\n"
+        "from pathlib import Path\n"
+        "import warnings\n"
+        "\n"
+        "import pandas as pd\n"
+        "\n"
+        "from hailmary.allocation.book_config import ROLES\n"
+        "from hailmary.allocation.diagnostic import (\n"
+        "    benchmark_comparison, combined_exposure, combined_exposure_figure,\n"
+        "    correlation_figure, correlation_matrix, redundancy_pairs,\n"
+        "    render_html_report, risk_contribution,\n"
+        ")\n"
+        "from hailmary.allocation.portfolios import Role, from_parsed\n"
+        "from hailmary.allocation.statements import parse_statement\n"
+        "from hailmary.data.providers import YahooFinanceProvider\n"
+        "\n"
+        "STATEMENT_PATH = Path('../../data/statements/2026-04 StashAway Monthly Statement.pdf')\n"
+        "REPORT_PATH = Path('../../reports/allocation_diagnostic.html')\n"
+        "START = date(2022, 1, 1)\n"
+        "END = date.today()\n"
+        "REDUNDANCY_THRESHOLD = 0.85"
+    ),
+    md("## Parse + tag + fetch returns"),
+    code(
+        "parsed = parse_statement(STATEMENT_PATH, use_cache=False)\n"
+        "portfolios = [from_parsed(p, roles=ROLES[p.name]) for p in parsed if p.name in ROLES]\n"
+        "holding = [p for p in portfolios if Role.HOLDING in p.roles]\n"
+        "tickers = sorted({\n"
+        "    h.metadata.ticker for p in holding for h in p.holdings\n"
+        "    if not h.metadata.ticker.startswith('CASH_')\n"
+        "})\n"
+        "provider = YahooFinanceProvider()\n"
+        "returns = provider.get_returns(tickers, START, END)\n"
+        "print(f'Resolved {len(portfolios)} portfolios; fetched {returns.shape[1]} ticker series')"
+    ),
+    md("## Combined-book exposure"),
+    code(
+        "with warnings.catch_warnings():\n"
+        "    warnings.simplefilter('ignore', UserWarning)\n"
+        "    exposure = combined_exposure(portfolios)\n"
+        "for dim, df in exposure.items():\n"
+        "    print(f'\\n--- {dim.replace(\"_\", \" \").title()} ---')\n"
+        "    display(df)\n"
+        "combined_exposure_figure(exposure)"
+    ),
+    md("## Correlation matrix"),
+    code(
+        "with warnings.catch_warnings():\n"
+        "    warnings.simplefilter('ignore', UserWarning)\n"
+        "    corr = correlation_matrix(portfolios, returns=returns)\n"
+        "display(corr.round(3))\n"
+        "correlation_figure(corr)"
+    ),
+    md(f"## Redundancy (threshold default {0.85})"),
+    code(
+        "pairs = redundancy_pairs(corr, threshold=REDUNDANCY_THRESHOLD, portfolios=portfolios)\n"
+        "if pairs:\n"
+        "    pd.DataFrame(pairs, columns=['a', 'b', 'rho', 'candidate'])\n"
+        "else:\n"
+        "    print(f'No portfolio pairs above ρ = {REDUNDANCY_THRESHOLD}.')\n"
+        "    print('If your customs are uncorrelated by design, this is expected — drop the threshold to 0.7 to surface near-redundancy.')"
+    ),
+    md("## Risk contribution"),
+    code(
+        "with warnings.catch_warnings():\n"
+        "    warnings.simplefilter('ignore', UserWarning)\n"
+        "    risk = risk_contribution(portfolios, returns=returns)\n"
+        "print('--- By portfolio ---')\n"
+        "display(risk['by_portfolio'].round(4))\n"
+        "print('--- By holding (top 15) ---')\n"
+        "display(risk['by_holding'].head(15).round(4))"
+    ),
+    md("## Benchmark comparison"),
+    code(
+        "with warnings.catch_warnings():\n"
+        "    warnings.simplefilter('ignore', UserWarning)\n"
+        "    bench = benchmark_comparison(portfolios, returns=returns)\n"
+        "bench.round(3)"
+    ),
+    md("## Export HTML report"),
+    code(
+        "with warnings.catch_warnings():\n"
+        "    warnings.simplefilter('ignore', UserWarning)\n"
+        "    out = render_html_report(\n"
+        "        portfolios,\n"
+        "        REPORT_PATH,\n"
+        "        returns=returns,\n"
+        "        redundancy_threshold=REDUNDANCY_THRESHOLD,\n"
+        "        title='Stashaway book — allocation diagnostic',\n"
+        "    )\n"
+        "print(f'Wrote {out.resolve()}')"
+    ),
+]
+
+
+def main() -> None:
+    write_notebook(Path("notebooks/allocation/01_validate_holdings.ipynb"), NB01)
+    write_notebook(Path("notebooks/allocation/02_validate_returns.ipynb"), NB02)
+    write_notebook(Path("notebooks/allocation/03_allocation_diagnostic.ipynb"), NB03)
+
+
+if __name__ == "__main__":
+    main()

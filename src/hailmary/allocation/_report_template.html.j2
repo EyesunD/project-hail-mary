@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>{{ title }}</title>
+<style>
+  body { font-family: Inter, system-ui, sans-serif; background: #0d1117; color: #e6edf3;
+         margin: 0; padding: 24px; }
+  h1, h2, h3 { color: #e6edf3; }
+  h2 { border-bottom: 1px solid #30363d; padding-bottom: 6px; margin-top: 32px; }
+  h3 { margin-top: 16px; color: #58a6ff; }
+  .ds-table { border-collapse: collapse; margin-top: 8px; font-size: 13px; }
+  .ds-table th, .ds-table td { border: 1px solid #30363d; padding: 6px 10px; text-align: right; }
+  .ds-table th { background: #161b22; text-align: left; }
+  .ds-table td:first-child, .ds-table th:first-child { text-align: left; }
+  .meta { color: #8b949e; font-size: 13px; }
+  .columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+             gap: 16px; }
+  .caveat { background: #161b22; border-left: 3px solid #d29922; padding: 10px 14px;
+            margin: 16px 0; color: #d29922; font-size: 13px; }
+</style>
+</head><body>
+<h1>{{ title }}</h1>
+<p class="meta">Generated {{ generated_at }} · {{ portfolio_count }} portfolios.</p>
+<div class="caveat">
+  Returns are reconstructed from <strong>current weights × historical underlying-asset prices</strong>
+  with weights held constant. This is a forward-looking estimate of today's book, not a realised
+  track record.
+</div>
+
+{% for label, fig in figures %}
+<h2>{{ label }}</h2>
+{{ fig | safe }}
+{% endfor %}
+
+<h2>Combined-book exposure</h2>
+<div class="columns">
+  {% for label, table in exposure.items() %}
+    <div><h3>{{ label }}</h3>{{ table | safe }}</div>
+  {% endfor %}
+</div>
+
+<h2>Redundancy</h2>
+{{ redundancy | safe }}
+
+<h2>Risk contribution — by portfolio</h2>
+{{ risk_by_portfolio | safe }}
+
+<h2>Risk contribution — by holding</h2>
+{{ risk_by_holding | safe }}
+
+<h2>Benchmark comparison</h2>
+{{ benchmarks | safe }}
+
+</body></html>

@@ -109,8 +109,15 @@ def parse_etf_universe(xlsx_path: Path | str) -> pd.DataFrame:
         lambda r: bloomberg_to_yahoo(r["bbg_ticker"], name=r.get("name")), axis=1
     )
     df["wrapper"] = df["bbg_ticker"].apply(_wrapper_label)
-    # Stashaway labels these as "US" but the real listings are UCITS LSE-only:
-    _XLSX_OVERRIDES = {"XMOV US": "XMOV.L"}
+    # Stashaway's xlsx ticker column has known mistakes — override to the actual
+    # Yahoo symbol where they differ from the underlying fund's real listing:
+    _XLSX_OVERRIDES = {
+        # Listed as XMOV US but the actual ticker is the LSE UCITS XMOV.L
+        "XMOV US": "XMOV.L",
+        # Row labelled "AHYG SP" (Asia HY USD) — real SGX symbol is QL3 (SGD
+        # share class) per Yahoo longName lookup. AHYG.SI has no Yahoo data.
+        "AHYG SP": "QL3.SI",
+    }
     df["yahoo_ticker"] = df.apply(
         lambda r: _XLSX_OVERRIDES.get(str(r["bbg_ticker"]).strip(), r["yahoo_ticker"]), axis=1
     )

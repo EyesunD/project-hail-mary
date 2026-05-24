@@ -105,7 +105,10 @@ STASHAWAY_UNIVERSE: dict[str, AssetMetadata] = {
     "G3B": _m("G3B.SI", "Equity", "Singapore", "Broad Market"),
     "CLR": _m("CLR.SI", "Equity", "Asia ex-Japan", "Broad Market"),
     "MMS": _m("MMS.SI", "Equity", "Singapore", "Broad Market"),
-    "QL3": _m("QL3.SI", "Equity", "Asia ex-Japan", "Broad Market"),
+    # QL3.SI = iShares USD Asia High Yield Bond ETF (SGD share class).
+    # Stashaway's xlsx mislabels this as "Singapore Equities" but the underlying
+    # is actually Asia HY USD bonds — confirmed via Yahoo longName.
+    "QL3": _m("QL3.SI", "Bond", "Asia ex-Japan", "High Yield USD"),
     # ----------------------------------------------------------------- Stashaway-only funds (no public ticker)
     # These are JPMorgan-branded share classes inside Income Investing — proxied with a
     # generic global aggregate-income ETF for diagnostic purposes only. Returns will

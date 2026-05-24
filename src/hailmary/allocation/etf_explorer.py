@@ -196,18 +196,31 @@ def build_etf_explorer(
             rec[f"ann_return_{label}"] = m["ann_return"]
             rec[f"max_dd_{label}"] = m["max_dd"]
             rec[f"vol_{label}"] = m["ann_vol"]
-        # Correlation with user's combined book over their shared dates
+        # Correlation with user's combined book — multi-window so we see
+        # whether the relationship is stable or just a long-period average.
         if not book_returns.empty and not series.empty:
-            aligned = pd.concat([book_returns, series], axis=1, join="inner").dropna()
-            if len(aligned) >= 20:
-                rec["corr_book"] = float(aligned.iloc[:, 0].corr(aligned.iloc[:, 1]))
-                rec["corr_n"] = int(len(aligned))
-            else:
-                rec["corr_book"] = float("nan")
-                rec["corr_n"] = int(len(aligned))
+            aligned_all = pd.concat([book_returns, series], axis=1, join="inner").dropna()
+            rec["corr_n"] = int(len(aligned_all))
+            # YTD
+            this_year = aligned_all.index.max().year if not aligned_all.empty else None
+            for label, n in [
+                ("YTD", None),
+                ("1Y", 252),
+                ("3Y", 756),
+                ("5Y", 1260),
+            ]:
+                if label == "YTD":
+                    sub = aligned_all[aligned_all.index.year == this_year] if this_year else aligned_all
+                else:
+                    sub = aligned_all.tail(n) if n else aligned_all
+                if len(sub) >= 20:
+                    rec[f"corr_book_{label}"] = float(sub.iloc[:, 0].corr(sub.iloc[:, 1]))
+                else:
+                    rec[f"corr_book_{label}"] = float("nan")
         else:
-            rec["corr_book"] = float("nan")
             rec["corr_n"] = 0
+            for label in ("YTD", "1Y", "3Y", "5Y"):
+                rec[f"corr_book_{label}"] = float("nan")
         rows.append(rec)
 
     out = pd.DataFrame(rows)
@@ -275,12 +288,16 @@ _TEMPLATE = """<!doctype html>
   <li><strong>Ann return (window)</strong> traffic-light: green ≥ target, yellow positive-but-under, red negative.</li>
   <li><strong>Sharpe (5Y)</strong> gradient: deeper green = higher risk-adjusted return.</li>
   <li><strong>Max DD (5Y)</strong> red intensity = magnitude of worst drawdown.</li>
-  <li><strong>ρ with book</strong> traffic-light: <span style="color:#3fb950">green &lt; 0.3</span> (good diversifier),
-      <span style="color:#d29922">yellow 0.3–0.6</span>, <span style="color:#f85149">red ≥ 0.6</span> (moves with your book).</li>
+  <li><strong>ρ YTD / 1Y / 3Y / 5Y</strong> traffic-light: <span style="color:#3fb950">green &lt; 0.3</span>
+      (good diversifier in that window), <span style="color:#d29922">yellow 0.3–0.6</span>,
+      <span style="color:#f85149">red ≥ 0.6</span>. Multi-window so you can see if the relationship
+      is <em>stable</em> (consistent across columns) or just a long-period average
+      (e.g. an ETF that's green 5Y but red 1Y has become correlated recently).</li>
 </ul>
 <p class="footnote">
-  <em>Caveat</em>: flat-period metrics mask regime variation — a low-ρ ETF can become high-ρ in
-  equity sell-offs. v2 of this report will add drawdown-bucket Sharpe and rolling correlation.
+  <em>Caveat</em>: still flat-period metrics within each window. A low-ρ ETF can become high-ρ
+  specifically in equity sell-offs. v2 of this report will add drawdown-bucket Sharpe and
+  rolling-correlation timelines.
 </p>
 {table}
 <script>
@@ -366,7 +383,10 @@ def render_etf_explorer_report(
             "sharpe_5Y": "5Y Sharpe",
             "max_dd_5Y": "5Y MaxDD",
             "vol_5Y": "5Y Vol",
-            "corr_book": "ρ book",
+            "corr_book_YTD": "ρ YTD",
+            "corr_book_1Y": "ρ 1Y",
+            "corr_book_3Y": "ρ 3Y",
+            "corr_book_5Y": "ρ 5Y",
             "corr_n": "ρ days",
         }
     )
@@ -374,7 +394,8 @@ def render_etf_explorer_report(
         "Asset Class", "Name", "Ticker", "Wrap", "Manager", "Data?", "Days",
         "YTD", "1Y ret", "3Y ret", "5Y ret",
         "1Y Sharpe", "3Y Sharpe", "5Y Sharpe",
-        "5Y MaxDD", "5Y Vol", "ρ book", "ρ days",
+        "5Y MaxDD", "5Y Vol",
+        "ρ YTD", "ρ 1Y", "ρ 3Y", "ρ 5Y", "ρ days",
     ]
     display = display[[c for c in cols if c in display.columns]]
     display = display.copy()
@@ -388,7 +409,8 @@ def render_etf_explorer_report(
     formatters["1Y Sharpe"] = "{:.2f}".format
     formatters["3Y Sharpe"] = "{:.2f}".format
     formatters["5Y Sharpe"] = "{:.2f}".format
-    formatters["ρ book"] = "{:+.2f}".format
+    for c in ("ρ YTD", "ρ 1Y", "ρ 3Y", "ρ 5Y"):
+        formatters[c] = "{:+.2f}".format
     formatters["Days"] = "{:,}".format
     formatters["ρ days"] = "{:,}".format
 
@@ -400,8 +422,9 @@ def render_etf_explorer_report(
         styler = styler.map(_style_sharpe, subset=["5Y Sharpe"])
     if "5Y MaxDD" in display.columns:
         styler = styler.map(_style_dd, subset=["5Y MaxDD"])
-    if "ρ book" in display.columns:
-        styler = styler.map(_style_corr, subset=["ρ book"])
+    corr_cols = [c for c in ("ρ YTD", "ρ 1Y", "ρ 3Y", "ρ 5Y") if c in display.columns]
+    if corr_cols:
+        styler = styler.map(_style_corr, subset=corr_cols)
     styler = styler.hide(axis="index").set_table_attributes('class="ds-table"')
 
     table_html = styler.to_html()

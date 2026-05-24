@@ -29,7 +29,24 @@ from hailmary.allocation.diagnostic import (
     book_performance,
 )
 from hailmary.allocation.portfolios import Portfolio
+from hailmary.allocation.returns import _apply_fx_adjustment
 from hailmary.analytics.metrics import PerformanceMetrics
+
+
+def _ticker_base_currency(ticker: str) -> str:
+    """Heuristic base currency for a Yahoo ticker. Right ~95% of the time.
+
+    SGX (.SI) trades in SGD, HKEX (.HK) in HKD (pegged ~7.8 to USD), LSE (.L)
+    UCITS variants are predominantly USD share classes for Stashaway's offering,
+    everything else (US listings) is USD. Edge cases (GBP UCITS share classes,
+    rare CHF/EUR variants) would need `yfinance.Ticker.info.currency` per
+    ticker — deferred as a follow-up.
+    """
+    if ticker.endswith(".SI"):
+        return "SGD"
+    if ticker.endswith(".HK"):
+        return "HKD"  # treated as USD-equivalent for FX (peg)
+    return "USD"
 
 _BBG_SUFFIX_MAP: dict[str, str] = {
     "LN": ".L",   # London Stock Exchange (mostly UCITS)
@@ -188,6 +205,16 @@ def build_etf_explorer(
             except Exception as e:
                 logger.debug(f"  {t}: {e}")
 
+    # FX-adjust non-SGD tickers' return series to SGD-base so the metrics + the
+    # correlation with the user's (SGD-base) combined book are apples-to-apples.
+    # Per `_ticker_base_currency` heuristic — USD (incl. UCITS LSE USD share
+    # classes and HKD-peg via .HK) get USDSGD compounding; .SI stays as-is.
+    if fx_series_usd_sgd is not None and not fx_series_usd_sgd.empty and not all_returns.empty:
+        for col in list(all_returns.columns):
+            if _ticker_base_currency(col) == "SGD":
+                continue
+            all_returns[col] = _apply_fx_adjustment(all_returns[col], fx_series_usd_sgd)
+
     book_perf = book_performance(
         portfolios,
         start=start,
@@ -314,6 +341,10 @@ _TEMPLATE = """<!doctype html>
    · target ann return = {target:.1%}</p>
 <p class="footnote">
   Discovery view over Stashaway's ETF Explorer universe. <strong>Click any column header to sort.</strong>
+  <strong>All returns are SGD-base</strong> — non-SGD ETFs (USD, .L UCITS USD share classes,
+  HKD-peg .HK) have daily USDSGD compounding applied so the numbers match what an SGD-base
+  investor would have realised, and so the correlation column compares apples-to-apples with
+  your SGD-base combined book. (.SI tickers are already SGD-denominated; no adjustment.)
 </p>
 <ul class="footnote">
   <li><strong>1M / 3M / YTD</strong> are <em>cumulative</em> returns over the window

@@ -54,9 +54,15 @@ _WRAPPER_BY_SUFFIX: dict[str, str] = {
 _WINDOWS_DAYS: dict[str, int] = {"1Y": 252, "3Y": 756, "5Y": 1260}
 
 
-def bloomberg_to_yahoo(bbg: str) -> str | None:
+def bloomberg_to_yahoo(bbg: str, name: str | None = None) -> str | None:
     """Convert Bloomberg ticker notation (e.g. 'ISAC LN', '9801:HK') to Yahoo
-    (e.g. 'ISAC.L', '9801.HK'). Returns None for unparseable input."""
+    (e.g. 'ISAC.L', '9801.HK'). Returns None for unparseable input.
+
+    Bare tickers (no exchange suffix) are ambiguous in Stashaway's list:
+    some are UCITS LSE-listed (XAID, ISDE, CSPX...), others are US-listed
+    (FETH, INDY, EIDO, FLTW...). Heuristic: if the fund name contains
+    "UCITS", default to ``.L``; otherwise leave bare (US listing).
+    """
     if bbg is None or (isinstance(bbg, float) and pd.isna(bbg)):
         return None
     s = str(bbg).strip()
@@ -66,7 +72,8 @@ def bloomberg_to_yahoo(bbg: str) -> str | None:
         return s.replace(":HK", ".HK")
     parts = s.split()
     if len(parts) == 1:
-        return parts[0]
+        is_ucits = name is not None and "UCITS" in str(name).upper()
+        return parts[0] + (".L" if is_ucits else "")
     sym, exch = parts[0], parts[1].upper()
     return sym + _BBG_SUFFIX_MAP.get(exch, "")
 
@@ -98,8 +105,15 @@ def parse_etf_universe(xlsx_path: Path | str) -> pd.DataFrame:
             "Fund Manager": "fund_manager",
         }
     )
-    df["yahoo_ticker"] = df["bbg_ticker"].apply(bloomberg_to_yahoo)
+    df["yahoo_ticker"] = df.apply(
+        lambda r: bloomberg_to_yahoo(r["bbg_ticker"], name=r.get("name")), axis=1
+    )
     df["wrapper"] = df["bbg_ticker"].apply(_wrapper_label)
+    # Stashaway labels these as "US" but the real listings are UCITS LSE-only:
+    _XLSX_OVERRIDES = {"XMOV US": "XMOV.L"}
+    df["yahoo_ticker"] = df.apply(
+        lambda r: _XLSX_OVERRIDES.get(str(r["bbg_ticker"]).strip(), r["yahoo_ticker"]), axis=1
+    )
     return df[["asset_class", "name", "bbg_ticker", "yahoo_ticker", "wrapper", "fund_manager"]]
 
 

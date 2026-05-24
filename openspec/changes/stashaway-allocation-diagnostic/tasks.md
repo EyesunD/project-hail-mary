@@ -75,8 +75,8 @@
 - [x] 10.6 Run `03_allocation_diagnostic.ipynb`; export HTML report
 - [ ] 10.7 Review redundancy threshold on real data; adjust default if 0.85 is wrong *(0.85 surfaced 3 pairs — kept as default; user to confirm)*
 - [ ] 10.8 Review proxy substitutions in `STASHAWAY_UNIVERSE` (see `memory/stashaway_proxies.md`): confirm `BTC-USD`/`ETH-USD` for FBTC/FETH, `CEU1.L`/`SPEM`/`MCHI` for the three missing LSE UCITS, and `AGG`/`EMB`/`HYG` for the five JPMorgan share classes inside Income Investing. Swap to closer matches if available.
-- [ ] 10.9 Decide on currency-mixing handling: combined-book exposure currently sums USD- and SGD-reported portfolios without FX conversion. Pull `USDSGD=X` daily series and convert if dollar-precise totals matter.
-- [ ] 10.10 Sanity-check the Singapore Investing Sharpe of 2.86 (only 439 days; recently-launched SGX tickers cap the window) — re-run with a longer horizon once more SGX history accumulates, or accept as-is.
+- [x] 10.9 ~~Decide on currency-mixing handling~~ — DONE 2026-05-24. Both directions implemented: AUM uses Stashaway PDF FX (parsed from "1 USD = X SGD" in PDF), per-portfolio returns FX-adjusted to SGD via daily USDSGD compounding. Ticker-level risk-contribution FX is deferred to 10d.3.
+- [x] 10.10 ~~Sanity-check the Singapore Investing Sharpe of 2.86~~ — ADDRESSED 2026-05-24. The default `ALIGN_WINDOW=True` mode now puts every combined-book metric on the 418-day common window (driven by Singapore Investing's first-data date), so SI's metrics are directly comparable to the rest of the book over the same period. User can toggle `ALIGN_WINDOW=False` for full-history view if desired.
 
 ## 10b. User review of overnight-run outputs (must precede archive)
 

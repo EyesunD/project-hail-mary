@@ -594,7 +594,11 @@ def portfolio_reconciliation(
                 f"Skipping {p.name!r} in reconciliation: {exc}", stacklevel=2
             )
             continue
-        cum_native = float((1.0 + native_series).prod() - 1.0) if not native_series.empty else 0.0
+        # The statement-date return represents what happened DURING that day,
+        # which is already baked into the statement closing balance. Cumulating
+        # it forward double-counts. Drop any rows on or before statement_date.
+        post_stmt = native_series[native_series.index.date > p.statement_date]
+        cum_native = float((1.0 + post_stmt).prod() - 1.0) if not post_stmt.empty else 0.0
 
         stmt_fx = p.metadata.get("statement_fx_usd_sgd")
         if p.currency.upper() == "USD":

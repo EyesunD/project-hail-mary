@@ -211,6 +211,10 @@ def build_etf_explorer(
             "fund_manager": row["fund_manager"],
             "has_data": not series.empty,
             "n_days": int(len(series)),
+            # Short windows: cumulative (not annualised) — annualising a 1M
+            # number extrapolates too aggressively
+            "cum_return_1M": float((1.0 + series.tail(21)).prod() - 1.0) if len(series) >= 5 else float("nan"),
+            "cum_return_3M": float((1.0 + series.tail(63)).prod() - 1.0) if len(series) >= 20 else float("nan"),
             "ytd_return": _ytd_return(series),
         }
         for label, n in _WINDOWS_DAYS.items():
@@ -225,9 +229,10 @@ def build_etf_explorer(
         if not book_returns.empty and not series.empty:
             aligned_all = pd.concat([book_returns, series], axis=1, join="inner").dropna()
             rec["corr_n"] = int(len(aligned_all))
-            # YTD
             this_year = aligned_all.index.max().year if not aligned_all.empty else None
             for label, n in [
+                ("1M", 21),
+                ("3M", 63),
                 ("YTD", None),
                 ("1Y", 252),
                 ("3Y", 756),
@@ -237,13 +242,15 @@ def build_etf_explorer(
                     sub = aligned_all[aligned_all.index.year == this_year] if this_year else aligned_all
                 else:
                     sub = aligned_all.tail(n) if n else aligned_all
-                if len(sub) >= 20:
+                # 1M has only ~21 trading days — lower threshold so it's defined
+                min_obs = 10 if label == "1M" else 20
+                if len(sub) >= min_obs:
                     rec[f"corr_book_{label}"] = float(sub.iloc[:, 0].corr(sub.iloc[:, 1]))
                 else:
                     rec[f"corr_book_{label}"] = float("nan")
         else:
             rec["corr_n"] = 0
-            for label in ("YTD", "1Y", "3Y", "5Y"):
+            for label in ("1M", "3M", "YTD", "1Y", "3Y", "5Y"):
                 rec[f"corr_book_{label}"] = float("nan")
         rows.append(rec)
 
@@ -309,14 +316,19 @@ _TEMPLATE = """<!doctype html>
   Discovery view over Stashaway's ETF Explorer universe. <strong>Click any column header to sort.</strong>
 </p>
 <ul class="footnote">
-  <li><strong>Ann return (window)</strong> traffic-light: green ≥ target, yellow positive-but-under, red negative.</li>
+  <li><strong>1M / 3M / YTD</strong> are <em>cumulative</em> returns over the window
+      (not annualised — annualising a 1M return extrapolates too aggressively).
+      Colour: green = positive, red = negative.</li>
+  <li><strong>1Y / 3Y / 5Y ret</strong> are <em>annualised</em> returns. Traffic-light:
+      green ≥ target ({target:.1%}), yellow positive-but-under, red negative.</li>
   <li><strong>Sharpe (5Y)</strong> gradient: deeper green = higher risk-adjusted return.</li>
   <li><strong>Max DD (5Y)</strong> red intensity = magnitude of worst drawdown.</li>
-  <li><strong>ρ YTD / 1Y / 3Y / 5Y</strong> traffic-light: <span style="color:#3fb950">green &lt; 0.3</span>
-      (good diversifier in that window), <span style="color:#d29922">yellow 0.3–0.6</span>,
-      <span style="color:#f85149">red ≥ 0.6</span>. Multi-window so you can see if the relationship
-      is <em>stable</em> (consistent across columns) or just a long-period average
-      (e.g. an ETF that's green 5Y but red 1Y has become correlated recently).</li>
+  <li><strong>ρ 1M / 3M / YTD / 1Y / 3Y / 5Y</strong> traffic-light:
+      <span style="color:#3fb950">green &lt; 0.3</span> (good diversifier in that window),
+      <span style="color:#d29922">yellow 0.3–0.6</span>, <span style="color:#f85149">red ≥ 0.6</span>.
+      Multi-window so you can see if the relationship is <em>stable</em> (consistent across
+      columns) or just a long-period average — an ETF that's green 5Y but red 1M
+      has become correlated recently.</li>
 </ul>
 <p class="footnote">
   <em>Caveat</em>: still flat-period metrics within each window. A low-ρ ETF can become high-ρ
@@ -398,6 +410,8 @@ def render_etf_explorer_report(
             "fund_manager": "Manager",
             "has_data": "Data?",
             "n_days": "Days",
+            "cum_return_1M": "1M",
+            "cum_return_3M": "3M",
             "ytd_return": "YTD",
             "ann_return_1Y": "1Y ret",
             "ann_return_3Y": "3Y ret",
@@ -407,6 +421,8 @@ def render_etf_explorer_report(
             "sharpe_5Y": "5Y Sharpe",
             "max_dd_5Y": "5Y MaxDD",
             "vol_5Y": "5Y Vol",
+            "corr_book_1M": "ρ 1M",
+            "corr_book_3M": "ρ 3M",
             "corr_book_YTD": "ρ YTD",
             "corr_book_1Y": "ρ 1Y",
             "corr_book_3Y": "ρ 3Y",
@@ -416,37 +432,43 @@ def render_etf_explorer_report(
     )
     cols = [
         "Asset Class", "Name", "Ticker", "Wrap", "Manager", "Data?", "Days",
-        "YTD", "1Y ret", "3Y ret", "5Y ret",
+        "1M", "3M", "YTD", "1Y ret", "3Y ret", "5Y ret",
         "1Y Sharpe", "3Y Sharpe", "5Y Sharpe",
         "5Y MaxDD", "5Y Vol",
-        "ρ YTD", "ρ 1Y", "ρ 3Y", "ρ 5Y", "ρ days",
+        "ρ 1M", "ρ 3M", "ρ YTD", "ρ 1Y", "ρ 3Y", "ρ 5Y", "ρ days",
     ]
     display = display[[c for c in cols if c in display.columns]]
     display = display.copy()
     display["Data?"] = display["Data?"].map({True: "✓", False: "—"})
 
     target_styler = _style_target(target_ann_return)
-    pct_cols = ["YTD", "1Y ret", "3Y ret", "5Y ret", "5Y Vol"]
-    formatters: dict[str, Any] = {c: "{:+.2%}".format for c in ["YTD", "1Y ret", "3Y ret", "5Y ret"]}
+    return_pct_cols = ["1M", "3M", "YTD", "1Y ret", "3Y ret", "5Y ret"]
+    formatters: dict[str, Any] = {c: "{:+.2%}".format for c in return_pct_cols}
     formatters["5Y Vol"] = "{:.2%}".format
     formatters["5Y MaxDD"] = "{:.2%}".format
     formatters["1Y Sharpe"] = "{:.2f}".format
     formatters["3Y Sharpe"] = "{:.2f}".format
     formatters["5Y Sharpe"] = "{:.2f}".format
-    for c in ("ρ YTD", "ρ 1Y", "ρ 3Y", "ρ 5Y"):
+    for c in ("ρ 1M", "ρ 3M", "ρ YTD", "ρ 1Y", "ρ 3Y", "ρ 5Y"):
         formatters[c] = "{:+.2f}".format
     formatters["Days"] = "{:,}".format
     formatters["ρ days"] = "{:,}".format
 
     styler = display.style.format(formatters, na_rep="—")
-    for c in ["YTD", "1Y ret", "3Y ret", "5Y ret"]:
+    # Short-window returns (1M/3M/YTD) are cumulative, not annualised — use
+    # sign-only colouring (positive=green, negative=red) rather than the
+    # annual-target traffic-light which would mislead at these scales.
+    for c in ["1M", "3M", "YTD"]:
+        if c in display.columns:
+            styler = styler.map(_style_pos_neg, subset=[c])
+    for c in ["1Y ret", "3Y ret", "5Y ret"]:
         if c in display.columns:
             styler = styler.map(target_styler, subset=[c])
     if "5Y Sharpe" in display.columns:
         styler = styler.map(_style_sharpe, subset=["5Y Sharpe"])
     if "5Y MaxDD" in display.columns:
         styler = styler.map(_style_dd, subset=["5Y MaxDD"])
-    corr_cols = [c for c in ("ρ YTD", "ρ 1Y", "ρ 3Y", "ρ 5Y") if c in display.columns]
+    corr_cols = [c for c in ("ρ 1M", "ρ 3M", "ρ YTD", "ρ 1Y", "ρ 3Y", "ρ 5Y") if c in display.columns]
     if corr_cols:
         styler = styler.map(_style_corr, subset=corr_cols)
     styler = styler.hide(axis="index").set_table_attributes('class="ds-table"')

@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from hailmary.allocation.diagnostic import (
+    PortfolioDroppedError,
     benchmark_comparison,
     combined_exposure,
     correlation_matrix,
@@ -16,7 +17,8 @@ from hailmary.allocation.diagnostic import (
     render_html_report,
     risk_contribution,
 )
-from hailmary.allocation.portfolios import Role
+from hailmary.allocation.portfolios import Holding, Portfolio, Role
+from hailmary.allocation.universe import STASHAWAY_UNIVERSE
 
 
 def test_combined_exposure_dimensions(synthetic_book: object) -> None:
@@ -60,6 +62,35 @@ def test_correlation_window_restriction(synthetic_book: object, synthetic_return
     assert not windowed.empty
     # Different windows should give different correlations on noisy data
     assert not np.allclose(full.values, windowed.values)
+
+
+def test_correlation_excludes_protected_only_portfolio(
+    make_portfolio: object, synthetic_book: object, synthetic_returns: object
+) -> None:
+    cash = make_portfolio(
+        "Cash Pool",
+        {"BND": 1.0},
+        roles={Role.PROTECTED},
+        total_value=50_000,
+    )
+    book = [*synthetic_book, cash]
+    corr = correlation_matrix(book, returns=synthetic_returns)
+    assert "Cash Pool" not in corr.index
+    assert "Cash Pool" not in corr.columns
+
+
+def test_benchmark_comparison_excludes_protected_only_portfolio(
+    make_portfolio: object, synthetic_book: object, synthetic_returns: object
+) -> None:
+    cash = make_portfolio(
+        "Cash Pool",
+        {"BND": 1.0},
+        roles={Role.PROTECTED},
+        total_value=50_000,
+    )
+    book = [*synthetic_book, cash]
+    df = benchmark_comparison(book, returns=synthetic_returns)
+    assert "Cash Pool" not in df.index
 
 
 def test_redundancy_protected_excluded_as_candidate(
@@ -135,6 +166,65 @@ def test_benchmark_comparison_warns_when_no_benchmark(
         df = benchmark_comparison(book, returns=synthetic_returns)
     bench_cols = [c for c in df.columns if c.startswith("sharpe_delta_vs_")]
     assert bench_cols == []
+
+
+def test_render_html_report_strict_raises_on_dropped_portfolio(
+    synthetic_book: object, synthetic_returns: object, tmp_path: Path
+) -> None:
+    """A portfolio holding a ticker absent from the returns DataFrame must surface
+    via PortfolioDroppedError instead of silently disappearing from the report."""
+    from dataclasses import replace
+    from datetime import date
+
+    ghost = Portfolio(
+        name="Unmapped Portfolio",
+        statement_date=date(2024, 9, 30),
+        total_value=100_000,
+        currency="USD",
+        holdings=[
+            Holding(
+                stashaway_id="MYSTERY",
+                weight=1.0,
+                value=100_000,
+                metadata=replace(STASHAWAY_UNIVERSE["VTI"], ticker="MYSTERY"),
+            )
+        ],
+        roles={Role.HOLDING, Role.CUSTOM},
+    )
+    book = [*synthetic_book, ghost]
+    out = tmp_path / "report.html"
+    with pytest.raises(PortfolioDroppedError) as exc_info:
+        render_html_report(book, out, returns=synthetic_returns, strict=True)
+    assert any(name == "Unmapped Portfolio" for name, _ in exc_info.value.dropped)
+
+
+def test_render_html_report_non_strict_warns_and_continues(
+    synthetic_book: object, synthetic_returns: object, tmp_path: Path
+) -> None:
+    """With strict=False the dropped portfolio emits a warning but the report still renders."""
+    from dataclasses import replace
+    from datetime import date
+
+    ghost = Portfolio(
+        name="Unmapped Portfolio",
+        statement_date=date(2024, 9, 30),
+        total_value=100_000,
+        currency="USD",
+        holdings=[
+            Holding(
+                stashaway_id="MYSTERY",
+                weight=1.0,
+                value=100_000,
+                metadata=replace(STASHAWAY_UNIVERSE["VTI"], ticker="MYSTERY"),
+            )
+        ],
+        roles={Role.HOLDING, Role.CUSTOM},
+    )
+    book = [*synthetic_book, ghost]
+    out = tmp_path / "report.html"
+    with pytest.warns(UserWarning, match="Unmapped Portfolio"):
+        render_html_report(book, out, returns=synthetic_returns, strict=False)
+    assert out.exists()
 
 
 def test_render_html_report_writes_nontrivial_file(

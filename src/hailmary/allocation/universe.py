@@ -113,11 +113,15 @@ STASHAWAY_UNIVERSE: dict[str, AssetMetadata] = {
     "JPGCBAS": _m("AGG", "Bond", "Global", "Aggregate (proxy: AGG)"),
     "JPGHYHS": _m("HYG", "Bond", "Global", "High Yield (proxy: HYG)"),
     "JPMGASA": _m("AGG", "Bond", "Global", "Aggregate (proxy: AGG)"),
-    # Lion Global / OCBC SGD money-market funds inside Guitsa / Simple SGD. These
-    # portfolios are PROTECTED-only (no HOLDING tag) so they're invisible to the
-    # diagnostic, but we map them to keep the resolver from raising.
+    # Lion Global / OCBC SGD money-market funds inside Guitsa / Simple SGD.
+    # Now HOLDING-tagged (since 2026-05) so they're visible as cash-replacement
+    # candidates; both resolve to the synthetic CASH_SGD series (~1.5% p.a.).
     "LNWELIA": _m("CASH_SGD", "Cash", "Singapore", "Money Market"),
     "OCBSGDM": _m("CASH_SGD", "Cash", "Singapore", "Money Market"),
+    # Simple USD's underlying is US 0-3M Treasury bills. BIL (SPDR Bloomberg 1-3
+    # Month T-Bill ETF) is a clean Yahoo proxy with real market data — gives
+    # Simple USD genuine price variation and a current ~5% yield.
+    "BB3M": _m("BIL", "Cash", "US", "Treasury 0-3M (proxy: BIL)"),
 }
 """Stashaway identifier → AssetMetadata.
 

@@ -19,6 +19,13 @@ it once the bar-level surface is settled. The cross-sectional factor path
 (`MultiFactorModel → FactorPortfolio`) is similarly retained for future multi-signal
 expansion.
 
+A separate **allocation diagnostic path** (`hailmary.allocation`) ingests real Stashaway
+PDF statements, role-tags portfolios, reconstructs returns via proxies through the
+existing `DataProvider` registry, and renders a self-contained HTML report covering
+combined-book exposure, correlation/redundancy, risk contribution, and Sharpe deltas vs
+`MANAGED_BENCHMARK`-tagged portfolios. Phase 1 only; FX conversion and longer-horizon
+Sharpe re-runs are deferred.
+
 ## Package layout
 
 ```
@@ -48,6 +55,13 @@ src/hailmary/
 │   ├── theme.py    # House theme (dark, high-contrast)
 │   ├── performance_charts.py  # PerformanceCharts + tearsheet (for BacktestResult)
 │   └── factor_charts.py       # FactorCharts + factor tearsheet
+├── allocation/     # Stashaway book ingestion + allocation diagnostic (Phase 1)
+│   ├── universe.py     # STASHAWAY_UNIVERSE: Stashaway asset → tradeable ticker + metadata
+│   ├── statements.py   # PDF parser (pdfplumber) + JSON fallback + parquet cache
+│   ├── portfolios.py   # Portfolio, Holding, Role (CUSTOM/MANAGED_BENCHMARK/PROTECTED/HOLDING)
+│   ├── returns.py      # portfolio_returns — reconstruct series from current weights
+│   ├── diagnostic.py   # combined_exposure, correlation_matrix, redundancy_pairs, risk_contribution, benchmark_comparison, render_html_report
+│   └── book_config.py  # Centralised role-tag mapping for the user's actual book
 └── cli/            # Click CLI (hailmary fetch, clear-cache, info)
 ```
 
@@ -97,6 +111,7 @@ pip install -e ".[dev,notebooks]"         # core + dev tools + Jupyter
 pip install -e ".[alpaca]"               # Alpaca provider
 pip install -e ".[polygon]"              # Polygon provider
 pip install -e ".[dash]"                 # Dash interactive dashboard
+pip install -e ".[allocation]"           # Stashaway PDF parsing + HTML report (pdfplumber, jinja2)
 ```
 
 ## Running tests

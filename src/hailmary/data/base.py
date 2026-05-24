@@ -162,11 +162,18 @@ class DataProvider(abc.ABC):
         end: date | datetime,
         timeframe: Timeframe = Timeframe.DAY_1,
         *,
-            adjust: bool = False,
-            log: bool = False,
+        adjust: bool = True,
+        log: bool = False,
     ) -> pd.DataFrame:
-        """Convenience: OHLCV → close-to-close returns wide DataFrame."""
-        bars = self.get_bars(symbols, start, end, timeframe,adjust=adjust)
+        """Convenience: OHLCV → close-to-close returns wide DataFrame.
+
+        Defaults to ``adjust=True`` so dividend distributions and splits are
+        reinvested into the price series — i.e. the returns are *total returns*,
+        not price returns. Critical for any holding that pays distributions
+        (BIL, sector SPDRs, dividend ETFs…) — without this their total return
+        is silently understated by the entire dividend yield.
+        """
+        bars = self.get_bars(symbols, start, end, timeframe, adjust=adjust)
         close = bars["close"].unstack(level=0)  # shape: (time, symbols)
         if log:
             import numpy as np

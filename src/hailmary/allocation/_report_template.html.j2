@@ -8,47 +8,253 @@
   h1, h2, h3 { color: #e6edf3; }
   h2 { border-bottom: 1px solid #30363d; padding-bottom: 6px; margin-top: 32px; }
   h3 { margin-top: 16px; color: #58a6ff; }
-  .ds-table { border-collapse: collapse; margin-top: 8px; font-size: 13px; }
-  .ds-table th, .ds-table td { border: 1px solid #30363d; padding: 6px 10px; text-align: right; }
+  .ds-table { border-collapse: collapse; margin-top: 8px; font-size: 12px; }
+  .ds-table th, .ds-table td { border: 1px solid #30363d; padding: 3px 7px; text-align: right; }
   .ds-table th { background: #161b22; text-align: left; }
   .ds-table td:first-child, .ds-table th:first-child { text-align: left; }
+  .ds-table td { font-variant-numeric: tabular-nums; }
   .meta { color: #8b949e; font-size: 13px; }
-  .columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  .columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
              gap: 16px; }
   .caveat { background: #161b22; border-left: 3px solid #d29922; padding: 10px 14px;
             margin: 16px 0; color: #d29922; font-size: 13px; }
+  .ds-summary th { width: 240px; }
+  .ds-summary td { font-variant-numeric: tabular-nums; }
+  .ds-windowed { margin-top: 14px; }
+  .ds-windowed td, .ds-windowed th { font-variant-numeric: tabular-nums; }
+  .footnote { color: #8b949e; font-size: 12px; margin-top: 10px; max-width: 1100px; line-height: 1.45; }
+  .footnote code { background: #161b22; padding: 1px 4px; border-radius: 3px; font-size: 11.5px; }
+  ul.footnote { margin-top: 4px; padding-left: 20px; }
+  ul.footnote li { margin-bottom: 6px; }
+  .ds-callout { background: #161b22; border-left: 3px solid #58a6ff; padding: 12px 16px;
+                margin: 12px 0; max-width: 1100px; }
+  .ds-callout p { line-height: 1.5; }
+  .risk-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+               gap: 24px; align-items: start; margin-top: 12px; }
+  .risk-card h3 { margin-top: 0; }
+  .risk-card .ds-table { width: 100%; }
+  .risk-card .ds-table td:last-child { max-width: 280px; word-break: break-word; }
+  .exposure-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+                   gap: 16px; margin-top: 8px; }
+  .exposure-card { background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+                   padding: 8px 12px 12px; }
+  .exposure-card .ds-exposure { width: 100%; font-size: 12px; margin-top: 6px; }
+  .exposure-card .ds-exposure td, .exposure-card .ds-exposure th { padding: 4px 8px;
+                                                                    font-variant-numeric: tabular-nums; }
+  .ds-table thead th { cursor: pointer; user-select: none; position: relative; }
+  .ds-table thead th:hover { background: #1f2730; }
+  .ds-table thead th[data-sort-dir="asc"]::after { content: " ▲"; color: #58a6ff; }
+  .ds-table thead th[data-sort-dir="desc"]::after { content: " ▼"; color: #58a6ff; }
 </style>
 </head><body>
 <h1>{{ title }}</h1>
-<p class="meta">Generated {{ generated_at }} · {{ portfolio_count }} portfolios.</p>
+<p class="meta">Generated {{ generated_at }} · book as of <strong>{{ statement_date }}</strong>
+   · {{ portfolio_count }} portfolios.</p>
 <div class="caveat">
-  Returns are reconstructed from <strong>current weights × historical underlying-asset prices</strong>
-  with weights held constant. This is a forward-looking estimate of today's book, not a realised
-  track record.
+  Returns are reconstructed from <strong>statement-date weights × historical underlying-asset prices</strong>
+  with weights held constant across the whole window. This is a forward-looking estimate of <em>your
+  book as of the statement date</em>, not a realised track record — any deposits, Stashaway
+  rebalances, or holding changes since the statement aren't reflected. Re-parse a newer statement
+  for an updated view.
 </div>
 
-{% for label, fig in figures %}
-<h2>{{ label }}</h2>
-{{ fig | safe }}
-{% endfor %}
+<h2>Combined book — performance summary</h2>
+{{ book_performance | safe }}
+{% if nav_chart %}{{ nav_chart | safe }}{% endif %}
+
+<h2>Portfolio reconciliation (statement → {{ reconciliation_as_of }})</h2>
+<p class="footnote">
+  Each row projects one portfolio forward from its <strong>statement date</strong> to
+  <strong>{{ reconciliation_as_of }}</strong> using the same reconstruction the rest of the report uses
+  (asset returns, Stashaway management fee, daily FX for SGD-base where applicable).
+  <strong>Open your Stashaway app side by side</strong> and compare:
+</p>
+<ul class="footnote">
+  <li>Compare <strong>Today (native)</strong> against the live value Stashaway shows for that
+      portfolio in its base currency (USD or SGD). Drift &lt; 0.1% is data-source noise,
+      0.1–0.5% is small dividend/rebalance/fee timing we don't model perfectly,
+      &gt; 0.5% means something real — a deposit or withdrawal you made since the statement,
+      or a model gap worth investigating. <em>Tip</em>: Stashaway's app values are sometimes
+      delayed by a day — if your app shows "as of 22 May" while this report says
+      <strong>{{ reconciliation_as_of }}</strong>, set <code>RECONCILE_AS_OF</code> at the top of
+      notebook 03 to match the app's date for an exact apples-to-apples compare.</li>
+  <li>Compare <strong>Today (SGD)</strong> against the SGD value in the app. Uses
+      Stashaway's PDF FX rate at statement date (so the start value matches exactly),
+      then compounds daily Yahoo USDSGD changes forward.</li>
+  <li><strong>Δ SGD</strong> is the absolute SGD gain/loss since the statement — the
+      practical "how much have I made on this sleeve this month" number.</li>
+</ul>
+{{ reconciliation | safe }}
 
 <h2>Combined-book exposure</h2>
-<div class="columns">
-  {% for label, table in exposure.items() %}
-    <div><h3>{{ label }}</h3>{{ table | safe }}</div>
-  {% endfor %}
-</div>
+{{ exposure_cards | safe }}
+
+<h2>Portfolio correlation</h2>
+{% if correlation_chart %}{{ correlation_chart | safe }}{% endif %}
 
 <h2>Redundancy</h2>
 {{ redundancy | safe }}
 
-<h2>Risk contribution — by portfolio</h2>
+<h2>Risk contribution</h2>
+{{ risk_callout | safe }}
+<p class="footnote">
+  The combined book has annualised volatility <code>σ_p = √(wᵀ·Σ·w)</code>. Each row attributes
+  part of that vol to a single portfolio, two ways:
+</p>
+<ul class="footnote">
+  <li><strong>Vol contribution (ann.)</strong> — Euler decomposition, <code>w_i · (Σw)_i / σ_p</code>.
+      Same units as <code>σ_p</code> (in <em>percentage-points of annualised vol</em>); sums exactly to
+      <code>σ_p</code>. Plain English: <em>"of my N% book vol, how much comes from this row?"</em>
+      Can be negative if the row is genuinely anti-correlated with the rest of the book — your
+      Stashaway portfolios are all long & broadly positively correlated, so most rows are positive here.</li>
+  <li><strong>% of total risk</strong> — same thing as a fraction of <code>σ_p</code> (sums to 100%).</li>
+  <li><strong>ΔVol if removed</strong> — discrete deletion vol: <code>σ_p − σ_p<sub>without this row</sub></code>
+      with the remaining weights renormalised to sum to 1. Plain English: <em>"if I sold this entirely
+      and reinvested the freed capital proportionally into the rest, how much does my book vol move?"</em>
+      <span style="color:#f85149">Red &amp; positive</span> = removing it <em>reduces</em> vol (a risk source);
+      <span style="color:#3fb950">green &amp; negative</span> = removing it <em>increases</em> vol (a diversifier
+      you'd lose).</li>
+</ul>
+<p class="footnote">
+  Click any column header to sort. <em>Caveat: ticker-level FX adjustment not yet applied
+  (task 10d.3) — relative rankings are correct; absolute SGD-scaled numbers will shift once that lands.</em>
+</p>
+
+<h3>By portfolio</h3>
+<p class="footnote" style="margin-top:0;">One row per Stashaway sleeve.</p>
 {{ risk_by_portfolio | safe }}
 
-<h2>Risk contribution — by holding</h2>
-{{ risk_by_holding | safe }}
+<div class="risk-grid">
+  <div class="risk-card">
+    <h3>By ticker (aggregated across portfolios)</h3>
+    <p class="footnote" style="margin-top:0;">One row per underlying. <strong>ΔVol if removed</strong>
+       = zeroing out the ticker <em>everywhere it appears</em>. The <em>Portfolios holding it</em>
+       column lists every sleeve that exposes you to that ticker.</p>
+    {{ risk_by_ticker | safe }}
+  </div>
+  <div class="risk-card">
+    <h3>By holding (portfolio · ticker)</h3>
+    <p class="footnote" style="margin-top:0;">Per-sleeve breakdown — separate rows for a single
+       underlying split across multiple sleeves. Click <strong>Portfolio · Ticker</strong> to sort
+       alphabetically (groups by portfolio).</p>
+    {{ risk_by_holding | safe }}
+  </div>
+</div>
 
 <h2>Benchmark comparison</h2>
+<p class="footnote">
+  <strong>Read the first row first.</strong> <em>Combined book</em> is the SGD-weighted average of
+  every <code>HOLDING</code>-tagged portfolio (with daily-renormalised weights so a young holding in
+  one sleeve doesn't truncate the whole book). It's the answer to the question this section is
+  really for: <em>"is my whole book — customs + managed + cash — beating what I'd get if I just
+  parked everything in General Investing?"</em>
+</p>
+<p class="footnote">
+  Each subsequent row is one individual portfolio. The first block (<strong>Sharpe</strong>,
+  <strong>Max DD</strong>, <strong>Ann. vol</strong>, <strong>Days</strong>) is that portfolio's own
+  performance over its native history. Every following block compares it to one
+  <code>MANAGED_BENCHMARK</code> (Stashaway's General/Singapore/Income Investing + BlackRock).
+</p>
+<ul class="footnote">
+  <li><strong>ΔSharpe vs X</strong> — the most important dial. Positive
+      (<span style="color:#3fb950">green</span>) = better risk-adjusted return than benchmark X;
+      negative (<span style="color:#f85149">red</span>) = benchmark wins. <em>Sharpe already
+      combines return and risk, so this is the safest single dial to act on.</em></li>
+  <li><strong>ΔMax DD vs X</strong> — positive = less drawdown (better); negative = worse.
+      Companion to ΔSharpe, not a standalone judgment: a high-upside sleeve like Crypto
+      <em>will</em> show worse drawdown vs a balanced benchmark — that's the price of admission,
+      not evidence the sleeve is broken. Read alongside ΔSharpe.</li>
+  <li><strong>ΔVol vs X</strong> — left uncoloured. More or less vol than a benchmark isn't
+      unambiguously good or bad — depends on your risk budget. Use together with ΔSharpe and
+      ΔReturn (implicit from cum return in the performance summary).</li>
+</ul>
+<p class="footnote">
+  <strong>Decision framing</strong>: if the <em>Combined book</em> row has green ΔSharpe vs every
+  benchmark, your customisation is pulling its weight overall. If it's red against, say, General
+  Investing, the diagnostic is telling you "you'd have done better just holding GI." Use the
+  per-portfolio rows below to figure out <em>which</em> sleeves are dragging — typically the ones
+  with the most red Δ cells across the board.
+</p>
+<p class="footnote">
+  <strong>Trap to avoid</strong>: single-metric judgment. A sleeve with red ΔMaxDD and red ΔVol
+  but green ΔSharpe is <em>winning</em> — it just gets there with a bumpier ride. Don't kill it
+  because two of three cells look red.
+</p>
+<p class="footnote">
+  <strong>Trap to avoid #2</strong>: high Sharpe ≠ enough return. Simple SGD's Sharpe ~4 looks
+  spectacular but is on a ~1.5% ann return — risk-adjusted excellent but won't grow wealth at a
+  5% target. The <strong>Ann. return</strong> column has a separate traffic-light
+  (green ≥ target, <span style="color:#d29922">yellow</span> = positive but below target,
+  red = negative) to flag this case directly.
+</p>
+<p class="footnote">
+  <em>Caveats</em>: Sharpe uses risk-free rate = 0% (no SORA/SOFR subtraction). Return series are
+  FX-adjusted (SGD-base via daily USDSGD). Per-portfolio histories differ — look at <strong>Days</strong>
+  to gauge how comparable two rows are; a portfolio with only 439 days of history won't have seen
+  the same regimes as one with 1,596 days.
+</p>
 {{ benchmarks | safe }}
+
+<script>
+(function () {
+  function parseCell(text) {
+    var t = (text || "").trim();
+    if (t === "" || t === "—" || t.toLowerCase() === "nan") return null;
+    var compact = t.match(/^([-+]?[0-9]+(?:\.[0-9]+)?)\s*([KMB])$/i);
+    if (compact) {
+      var mult = { K: 1e3, M: 1e6, B: 1e9 }[compact[2].toUpperCase()];
+      return parseFloat(compact[1]) * mult;
+    }
+    if (/%$/.test(t)) {
+      var pct = parseFloat(t.replace(/[^0-9.+\-]/g, ""));
+      return isNaN(pct) ? t : pct / 100;
+    }
+    var stripped = t.replace(/[,\s]/g, "");
+    if (/^[-+]?[0-9]+(?:\.[0-9]+)?$/.test(stripped)) return parseFloat(stripped);
+    return t.toLowerCase();
+  }
+
+  function compare(a, b) {
+    if (a === null && b === null) return 0;
+    if (a === null) return 1;
+    if (b === null) return -1;
+    if (typeof a === "number" && typeof b === "number") return a - b;
+    return String(a).localeCompare(String(b));
+  }
+
+  function makeSortable(table) {
+    var headerRows = table.querySelectorAll("thead tr");
+    if (!headerRows.length) return;
+    var headers = headerRows[headerRows.length - 1].querySelectorAll("th");
+    var tbody = table.querySelector("tbody");
+    if (!tbody) return;
+    var dataCols = table.tBodies[0].rows.length ? table.tBodies[0].rows[0].cells.length : 0;
+    var hasIndex = headers.length === dataCols + 1;
+    headers.forEach(function (th, idx) {
+      th.addEventListener("click", function () {
+        var current = th.getAttribute("data-sort-dir");
+        var nextDir = current === "asc" ? "desc" : "asc";
+        headers.forEach(function (h) { h.removeAttribute("data-sort-dir"); });
+        th.setAttribute("data-sort-dir", nextDir);
+        var cellIdx = hasIndex ? idx - 1 : idx;
+        var rows = Array.prototype.slice.call(tbody.querySelectorAll("tr"));
+        rows.sort(function (rA, rB) {
+          var cellA = cellIdx < 0 ? rA.cells[0] : (rA.cells[cellIdx + (hasIndex ? 1 : 0)] || rA.cells[cellIdx]);
+          var cellB = cellIdx < 0 ? rB.cells[0] : (rB.cells[cellIdx + (hasIndex ? 1 : 0)] || rB.cells[cellIdx]);
+          var vA = parseCell(cellA ? cellA.textContent : "");
+          var vB = parseCell(cellB ? cellB.textContent : "");
+          var c = compare(vA, vB);
+          return nextDir === "asc" ? c : -c;
+        });
+        rows.forEach(function (r) { tbody.appendChild(r); });
+      });
+    });
+  }
+
+  document.addEventListener("DOMContentLoaded", function () {
+    document.querySelectorAll("table.ds-table").forEach(makeSortable);
+  });
+})();
+</script>
 
 </body></html>

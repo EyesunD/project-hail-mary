@@ -70,12 +70,20 @@ class Portfolio:
         return role in self.roles
 
 
-def from_parsed(parsed: ParsedPortfolio, roles: set[Role]) -> Portfolio:
+def from_parsed(
+    parsed: ParsedPortfolio,
+    roles: set[Role],
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> Portfolio:
     """Build a :class:`Portfolio` from a :class:`ParsedPortfolio`.
 
     Each holding is resolved against the universe map; an unknown identifier
     raises :class:`hailmary.allocation.universe.UnknownAssetError` so the gap
-    surfaces immediately rather than silently dropping the row.
+    surfaces immediately rather than silently dropping the row. Optional
+    ``metadata`` is attached to ``Portfolio.metadata`` — commonly used to
+    carry a per-portfolio ``management_fee_annual`` for return-series
+    deduction (see ``returns.py``).
     """
     holdings = [
         Holding(
@@ -86,6 +94,9 @@ def from_parsed(parsed: ParsedPortfolio, roles: set[Role]) -> Portfolio:
         )
         for h in parsed.holdings
     ]
+    md: dict[str, Any] = dict(metadata) if metadata else {}
+    if parsed.statement_fx_usd_sgd is not None:
+        md.setdefault("statement_fx_usd_sgd", parsed.statement_fx_usd_sgd)
     return Portfolio(
         name=parsed.name,
         statement_date=parsed.statement_date,
@@ -93,4 +104,5 @@ def from_parsed(parsed: ParsedPortfolio, roles: set[Role]) -> Portfolio:
         currency=parsed.currency,
         holdings=holdings,
         roles=set(roles),
+        metadata=md,
     )

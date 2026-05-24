@@ -31,6 +31,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import plotly.io as pio
+from plotly.subplots import make_subplots
 
 from hailmary.allocation.portfolios import Portfolio, Role
 from hailmary.allocation.returns import portfolio_returns
@@ -42,6 +43,171 @@ if TYPE_CHECKING:
 
 
 _TRADING_DAYS = 252
+
+
+def book_common_history_start(
+    portfolios: Sequence[Portfolio],
+    *,
+    price_source: Any | None = None,
+    returns: pd.DataFrame | None = None,
+    start: date | datetime | None = None,
+    end: date | datetime | None = None,
+    fx_series_usd_sgd: pd.Series | None = None,
+) -> date | None:
+    """Latest first-available date across ``HOLDING``-tagged portfolios.
+
+    Use this to align the diagnostic window so every portfolio is comparable on
+    the same dates. Returns ``None`` if no holding portfolios produce a series.
+    """
+    holdings_books = [p for p in portfolios if Role.HOLDING in p.roles]
+    if not holdings_books:
+        return None
+    panel = _build_returns_panel(
+        holdings_books,
+        price_source=price_source,
+        returns=returns,
+        start=start,
+        end=end,
+        fx_series_usd_sgd=fx_series_usd_sgd,
+    )
+    if panel.empty:
+        return None
+    first_dates: list[pd.Timestamp] = []
+    for col in panel.columns:
+        s = panel[col].dropna()
+        if s.empty:
+            continue
+        first_dates.append(s.index.min())
+    if not first_dates:
+        return None
+    return max(first_dates).date()
+
+
+class PortfolioDroppedError(Exception):
+    """Raised when one or more portfolios would be silently dropped from the diagnostic.
+
+    Common causes: ticker not in the universe map → no Yahoo fetch → no data;
+    every holding's ticker missing from the supplied returns DataFrame; weights
+    sum to zero (e.g. all holdings collapse to a duplicate ticker that was dropped).
+    """
+
+    def __init__(self, dropped: list[tuple[str, str]]) -> None:
+        self.dropped = dropped
+        body = "\n  - ".join(f"{name}: {reason}" for name, reason in dropped)
+        super().__init__(
+            f"Diagnostic would silently drop {len(dropped)} portfolio(s):\n  - {body}"
+        )
+
+_WINDOWS: dict[str, int | None] = {
+    "1M": 21,
+    "3M": 63,
+    "6M": 126,
+    "1Y": 252,
+    "All": None,
+}
+
+
+def _fmt_compact(value: float) -> str:
+    """Format 6500 → '6.5K', 1_200_000 → '1.2M', 3.2e9 → '3.2B'."""
+    if value is None or pd.isna(value):
+        return "—"
+    av = abs(value)
+    sign = "-" if value < 0 else ""
+    if av >= 1e9:
+        return f"{sign}{av / 1e9:.2f}B"
+    if av >= 1e6:
+        return f"{sign}{av / 1e6:.2f}M"
+    if av >= 1e3:
+        return f"{sign}{av / 1e3:.1f}K"
+    return f"{sign}{av:,.0f}"
+
+
+def _fmt_compact_signed(value: float) -> str:
+    """Same as `_fmt_compact` but always shows leading sign for non-zero values."""
+    if value is None or pd.isna(value):
+        return "—"
+    if value == 0:
+        return "0"
+    formatted = _fmt_compact(value)
+    return formatted if formatted.startswith("-") else f"+{formatted}"
+
+
+def _fmt_compact_precise(value: float) -> str:
+    """Compact $ formatter with one more decimal than ``_fmt_compact`` (e.g.
+    40,510 → '40.51K', 1,234,567 → '1.235M'). Use where ~$50 precision on
+    K-scale values matters (e.g. reconciliation rows you compare to the app)."""
+    if value is None or pd.isna(value):
+        return "—"
+    av = abs(value)
+    sign = "-" if value < 0 else ""
+    if av >= 1e9:
+        return f"{sign}{av / 1e9:.3f}B"
+    if av >= 1e6:
+        return f"{sign}{av / 1e6:.3f}M"
+    if av >= 1e3:
+        return f"{sign}{av / 1e3:.2f}K"
+    return f"{sign}{av:,.0f}"
+
+
+def _fmt_compact_precise_signed(value: float) -> str:
+    """Signed variant of ``_fmt_compact_precise``."""
+    if value is None or pd.isna(value):
+        return "—"
+    if value == 0:
+        return "0"
+    formatted = _fmt_compact_precise(value)
+    return formatted if formatted.startswith("-") else f"+{formatted}"
+
+
+# ---------------------------------------------------------------------------
+# Conditional-formatting cell stylers (return CSS strings for pandas.Styler)
+# ---------------------------------------------------------------------------
+
+
+def _style_pos_neg(val: float) -> str:
+    if pd.isna(val) or val == 0:
+        return ""
+    if val > 0:
+        return "background-color: rgba(63, 185, 80, 0.18); color: #3fb950;"
+    return "background-color: rgba(248, 81, 73, 0.18); color: #f85149;"
+
+
+def _style_sharpe(val: float) -> str:
+    if pd.isna(val):
+        return ""
+    if val >= 1.0:
+        a = min(0.42, 0.18 + (val - 1.0) * 0.10)
+        return f"background-color: rgba(63, 185, 80, {a:.2f}); color: #3fb950;"
+    if val > 0:
+        return "background-color: rgba(63, 185, 80, 0.08);"
+    return "background-color: rgba(248, 81, 73, 0.20); color: #f85149;"
+
+
+def _style_dd(val: float) -> str:
+    if pd.isna(val) or val == 0:
+        return ""
+    intensity = min(abs(val) / 0.50, 1.0)
+    a = 0.10 + 0.30 * intensity
+    return f"background-color: rgba(248, 81, 73, {a:.2f}); color: #f85149;"
+
+
+def _style_rho(val: float) -> str:
+    if pd.isna(val):
+        return ""
+    a = max(0.18, min(0.55, 0.18 + (val - 0.70) * 0.90))
+    return f"background-color: rgba(248, 81, 73, {a:.2f}); color: #f85149;"
+
+
+def _style_pct_total(val: float) -> str:
+    if pd.isna(val) or val <= 0:
+        return ""
+    a = min(0.45, val * 1.20)
+    return f"background-color: rgba(255, 166, 87, {a:.2f}); color: #ffa657;"
+
+
+def _style_dd_delta(val: float) -> str:
+    """Drawdown delta: positive = less DD = good (green); negative = more DD = bad (red)."""
+    return _style_pos_neg(val)
 
 
 # ---------------------------------------------------------------------------
@@ -87,22 +253,376 @@ def combined_exposure(portfolios: Sequence[Portfolio]) -> dict[str, pd.DataFrame
     return out
 
 
+def single_exposure_donut(df: pd.DataFrame, *, title: str) -> go.Figure:
+    """Compact single-dimension donut (no legend; bucket labels carried by the table beside it)."""
+    fig = go.Figure(
+        go.Pie(
+            labels=df["bucket"],
+            values=df["value"],
+            hole=0.55,
+            textinfo="percent",
+            textposition="inside",
+            insidetextorientation="horizontal",
+            hovertemplate="%{label}<br>$%{value:,.0f} (%{percent})<extra></extra>",
+            sort=True,
+            direction="clockwise",
+            showlegend=False,
+        )
+    )
+    fig = apply_theme(fig, title=title, height=260)
+    fig.update_layout(margin={"l": 10, "r": 10, "t": 44, "b": 10})
+    return fig
+
+
 def combined_exposure_figure(exposure: dict[str, pd.DataFrame]) -> go.Figure:
-    """Stacked-bar figure summarising the three exposure dimensions."""
-    fig = go.Figure()
-    colours = [PALETTE["accent_blue"], PALETTE["accent_green"], PALETTE["accent_purple"]]
-    for (dim, df), colour in zip(exposure.items(), colours, strict=False):
+    """1×3 donut chart with grouped legends — one ring per exposure dimension."""
+    dims = [("asset_class", "Asset Class"), ("region", "Region"), ("sector", "Sector")]
+    fig = make_subplots(
+        rows=1,
+        cols=3,
+        specs=[[{"type": "domain"}] * 3],
+        subplot_titles=[label for _, label in dims],
+        horizontal_spacing=0.02,
+    )
+    for i, (key, label) in enumerate(dims, start=1):
+        df = exposure[key]
         fig.add_trace(
-            go.Bar(
-                name=dim.replace("_", " ").title(),
-                x=df["bucket"],
-                y=df["weight"],
-                marker_color=colour,
-                hovertemplate="%{x}: %{y:.1%}<extra></extra>",
+            go.Pie(
+                labels=df["bucket"],
+                values=df["value"],
+                hole=0.55,
+                textinfo="percent",
+                textposition="inside",
+                insidetextorientation="horizontal",
+                hovertemplate="%{label}<br>%{value:$,.0f} (%{percent})<extra></extra>",
+                showlegend=True,
+                legendgroup=key,
+                legendgrouptitle_text=label,
+                sort=True,
+                direction="clockwise",
+            ),
+            row=1,
+            col=i,
+        )
+    fig = apply_theme(fig, title="Combined-book exposure", height=520)
+    fig.update_layout(
+        margin={"l": 20, "r": 20, "t": 80, "b": 20},
+        legend={
+            "orientation": "h",
+            "yanchor": "top",
+            "y": -0.05,
+            "xanchor": "center",
+            "x": 0.5,
+            "groupclick": "toggleitem",
+            "bgcolor": PALETTE["surface"],
+            "bordercolor": PALETTE["border"],
+            "borderwidth": 1,
+            "font": {"size": 11},
+        },
+    )
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Whole-book performance
+# ---------------------------------------------------------------------------
+
+
+def book_performance(
+    portfolios: Sequence[Portfolio],
+    *,
+    start: date | datetime | None = None,
+    end: date | datetime | None = None,
+    price_source: Any | None = None,
+    returns: pd.DataFrame | None = None,
+    risk_free_rate: float = 0.0,
+    fx_rate_usd_sgd: float | None = None,
+    fx_series_usd_sgd: pd.Series | None = None,
+    align_window: bool = True,
+) -> dict[str, Any]:
+    """Whole-book metrics + NAV series (current-snapshot reconstruction).
+
+    Combines per-portfolio return series with weights ∝ ``total_value`` across
+    ``HOLDING``-tagged portfolios. Weights are re-normalised per timestep over
+    the portfolios that have data on that date, so a recently-launched holding
+    in one portfolio doesn't truncate the whole book's history.
+
+    Returns a dict::
+
+        {
+            "aum": float,             # total HOLDING-tagged $ (in source currency)
+            "ann_return": float,      # annualised return
+            "ann_vol": float,         # annualised vol
+            "sharpe": float,
+            "max_dd": float,
+            "nav": pd.Series,         # daily NAV indexed to 100 at first date
+            "n_days": int,
+        }
+    """
+    holdings_books = [p for p in portfolios if Role.HOLDING in p.roles]
+    if fx_rate_usd_sgd is None:
+        # Prefer the statement-date FX rate parsed from the Stashaway PDF
+        # (Singapore-EOD, matches the app exactly). Fall back to Yahoo's spot,
+        # then to 1.0 with a warning.
+        statement_fx_rates = [
+            p.metadata.get("statement_fx_usd_sgd")
+            for p in holdings_books
+            if p.metadata.get("statement_fx_usd_sgd") is not None
+        ]
+        if statement_fx_rates:
+            fx_rate_usd_sgd = float(statement_fx_rates[0])
+        elif fx_series_usd_sgd is not None and not fx_series_usd_sgd.empty:
+            fx_rate_usd_sgd = float(fx_series_usd_sgd.dropna().iloc[-1])
+        else:
+            fx_rate_usd_sgd = 1.0
+            if any(p.currency.upper() == "USD" for p in holdings_books):
+                warnings.warn(
+                    "fx_rate_usd_sgd not supplied; USD-reported portfolios are summed "
+                    "into AUM as if 1 USD = 1 SGD. Pass an FX rate for an SGD-denominated total.",
+                    stacklevel=2,
+                )
+
+    def _to_sgd(value: float, ccy: str) -> float:
+        return value * fx_rate_usd_sgd if ccy.upper() == "USD" else value
+
+    if not holdings_books:
+        return {
+            "aum": 0.0,
+            "currency": "SGD",
+            "fx_rate_usd_sgd": fx_rate_usd_sgd,
+            "ann_return": 0.0,
+            "ann_vol": 0.0,
+            "sharpe": 0.0,
+            "max_dd": 0.0,
+            "nav": pd.Series(dtype=float),
+            "n_days": 0,
+        }
+
+    panel = _build_returns_panel(
+        holdings_books,
+        price_source=price_source,
+        returns=returns,
+        start=start,
+        end=end,
+        fx_series_usd_sgd=fx_series_usd_sgd,
+    )
+    aum = sum(_to_sgd(p.total_value, p.currency) for p in holdings_books)
+    if panel.empty:
+        return {
+            "aum": aum,
+            "currency": "SGD",
+            "fx_rate_usd_sgd": fx_rate_usd_sgd,
+            "ann_return": 0.0,
+            "ann_vol": 0.0,
+            "sharpe": 0.0,
+            "max_dd": 0.0,
+            "nav": pd.Series(dtype=float),
+            "n_days": 0,
+        }
+
+    weights = pd.Series({
+        p.name: _to_sgd(p.total_value, p.currency)
+        for p in holdings_books
+        if p.name in panel.columns
+    })
+    weights = weights / weights.sum()
+    panel = panel[weights.index]
+
+    if align_window:
+        # Apples-to-apples: align every column to the common window so weights
+        # are static (no per-day renormalisation, no "early book ≠ late book"
+        # mixing). Shorter history, cleaner numbers.
+        common_start = max(panel[c].dropna().index.min() for c in panel.columns)
+        aligned_panel = panel.loc[common_start:].dropna(how="any")
+        if aligned_panel.empty:
+            book_return = pd.Series(dtype=float)
+        else:
+            book_return = (aligned_panel * weights).sum(axis=1)
+    else:
+        # Full history with dynamic per-timestep weight renormalisation —
+        # early dates use only the older portfolios at boosted weights.
+        # Longer history but the early "book" isn't the same as today's book.
+        available = panel.notna().astype(float)
+        eff_weights = available.mul(weights, axis=1)
+        row_sums = eff_weights.sum(axis=1).replace(0.0, np.nan)
+        eff_weights = eff_weights.div(row_sums, axis=0)
+        book_return = (panel.fillna(0.0) * eff_weights).sum(axis=1).dropna()
+
+    if book_return.empty:
+        return {
+            "aum": aum,
+            "currency": "SGD",
+            "fx_rate_usd_sgd": fx_rate_usd_sgd,
+            "ann_return": 0.0,
+            "ann_vol": 0.0,
+            "sharpe": 0.0,
+            "max_dd": 0.0,
+            "nav": pd.Series(dtype=float),
+            "n_days": 0,
+        }
+
+    metrics = PerformanceMetrics(book_return, risk_free_rate=risk_free_rate)
+    nav = (1.0 + book_return).cumprod() * 100.0
+    return {
+        "aum": float(aum),
+        "currency": "SGD",
+        "fx_rate_usd_sgd": float(fx_rate_usd_sgd),
+        "ann_return": float(metrics.annualised_return),
+        "ann_vol": float(metrics.annualised_vol),
+        "sharpe": float(metrics.sharpe),
+        "max_dd": float(metrics.max_drawdown),
+        "nav": nav,
+        "n_days": len(book_return),
+        "windowed": _windowed_metrics(book_return, risk_free_rate=risk_free_rate),
+    }
+
+
+def _windowed_metrics(returns: pd.Series, *, risk_free_rate: float = 0.0) -> pd.DataFrame:
+    """Per-window cumulative return + annualised metrics over standard lookbacks
+    plus one row per calendar year that overlaps the series.
+
+    Columns: ``period, cum_return, ann_return, ann_vol, sharpe, max_dd, days``.
+    ``cum_return`` is the simple cumulative return over the window; every other
+    return/vol number is annualised so windows are directly comparable.
+    """
+    def _row(label: str, sub: pd.Series) -> dict[str, Any]:
+        if len(sub) < 5:
+            return {
+                "period": label,
+                "cum_return": float("nan"),
+                "ann_return": float("nan"),
+                "ann_vol": float("nan"),
+                "sharpe": float("nan"),
+                "max_dd": float("nan"),
+                "days": int(len(sub)),
+            }
+        m = PerformanceMetrics(sub, risk_free_rate=risk_free_rate)
+        return {
+            "period": label,
+            "cum_return": float(m.total_return),
+            "ann_return": float(m.annualised_return),
+            "ann_vol": float(m.annualised_vol),
+            "sharpe": float(m.sharpe),
+            "max_dd": float(m.max_drawdown),
+            "days": int(len(sub)),
+        }
+
+    rows: list[dict[str, Any]] = []
+    for label, n_days in _WINDOWS.items():
+        sub = returns if n_days is None else returns.tail(n_days)
+        rows.append(_row(label, sub))
+
+    if not returns.empty:
+        first_year = returns.index.min().year
+        last_year = returns.index.max().year
+        for year in range(first_year, last_year + 1):
+            year_sub = returns[returns.index.year == year]
+            if year_sub.empty:
+                continue
+            jan1 = pd.Timestamp(year=year, month=1, day=1)
+            dec31 = pd.Timestamp(year=year, month=12, day=31)
+            is_partial = year_sub.index.min() > jan1 + pd.Timedelta(days=7) or (
+                year == last_year and year_sub.index.max() < dec31 - pd.Timedelta(days=7)
+            )
+            label = f"{year} (partial)" if is_partial else str(year)
+            rows.append(_row(label, year_sub))
+
+    return pd.DataFrame(rows)
+
+
+def equity_curve_figure(nav: pd.Series) -> go.Figure:
+    """Line chart of the whole-book NAV series (indexed to 100)."""
+    fig = go.Figure()
+    if not nav.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=nav.index,
+                y=nav.values,
+                mode="lines",
+                line={"color": PALETTE["accent_blue"], "width": 2},
+                hovertemplate="%{x|%Y-%m-%d}<br>NAV %{y:.1f}<extra></extra>",
+                name="Book NAV",
             )
         )
-    fig.update_layout(barmode="group", yaxis_tickformat=".0%")
-    return apply_theme(fig, title="Combined-book exposure", height=420)
+    fig = apply_theme(fig, title="Combined-book NAV (statement-date weights, indexed to 100)", height=380)
+    fig.update_layout(yaxis_title="NAV", showlegend=False)
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Per-portfolio reconciliation (statement-date → today)
+# ---------------------------------------------------------------------------
+
+
+def portfolio_reconciliation(
+    portfolios: Sequence[Portfolio],
+    *,
+    end: date | datetime,
+    price_source: Any | None = None,
+    returns: pd.DataFrame | None = None,
+    fx_series_usd_sgd: pd.Series | None = None,
+) -> pd.DataFrame:
+    """Project each portfolio's value from its statement date to ``end``.
+
+    For every ``HOLDING``-tagged portfolio, returns a row with:
+    ``currency`` · ``stmt_native`` · ``stmt_sgd`` · ``today_native`` · ``today_sgd``
+    · ``delta_sgd`` · ``return_native`` · ``return_sgd``.
+
+    SGD values are mark-to-market: ``stmt_sgd = stmt_native × statement-date FX
+    (from PDF)``, ``today_sgd = today_native × today's spot FX``. This matches
+    what Stashaway's app displays. (For SGD-base *return* series the rest of
+    the report compounds USD return × daily FX changes — different question.)
+    """
+    holdings_books = [p for p in portfolios if Role.HOLDING in p.roles]
+    today_spot = (
+        float(fx_series_usd_sgd.dropna().iloc[-1])
+        if fx_series_usd_sgd is not None and not fx_series_usd_sgd.empty
+        else 1.0
+    )
+    rows: list[dict[str, Any]] = []
+    for p in holdings_books:
+        try:
+            native_series = portfolio_returns(
+                p,
+                start=p.statement_date,
+                end=end,
+                price_source=price_source,
+                returns=returns,
+            )
+        except Exception as exc:
+            warnings.warn(
+                f"Skipping {p.name!r} in reconciliation: {exc}", stacklevel=2
+            )
+            continue
+        cum_native = float((1.0 + native_series).prod() - 1.0) if not native_series.empty else 0.0
+
+        stmt_fx = p.metadata.get("statement_fx_usd_sgd")
+        if p.currency.upper() == "USD":
+            stmt_fx_value = float(stmt_fx) if stmt_fx is not None else 1.0
+            stmt_sgd = p.total_value * stmt_fx_value
+            today_native = p.total_value * (1.0 + cum_native)
+            today_sgd = today_native * today_spot  # mark-to-market — matches app
+        else:
+            stmt_sgd = p.total_value
+            today_native = p.total_value * (1.0 + cum_native)
+            today_sgd = today_native  # SGD-native: no FX conversion
+
+        return_sgd = (today_sgd / stmt_sgd) - 1.0 if stmt_sgd > 0 else 0.0
+
+        rows.append(
+            {
+                "portfolio": p.name,
+                "currency": p.currency.upper(),
+                "stmt_native": p.total_value,
+                "stmt_sgd": stmt_sgd,
+                "today_native": today_native,
+                "today_sgd": today_sgd,
+                "delta_sgd": today_sgd - stmt_sgd,
+                "return_native": cum_native,
+                "return_sgd": return_sgd,
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 # ---------------------------------------------------------------------------
@@ -117,13 +637,22 @@ def _build_returns_panel(
     returns: pd.DataFrame | None = None,
     start: date | datetime | None = None,
     end: date | datetime | None = None,
+    fx_series_usd_sgd: pd.Series | None = None,
+    strict: bool = False,
 ) -> pd.DataFrame:
     """Compute one return series per portfolio and stack into a wide DataFrame.
 
     Falls back to the in-memory wide returns DataFrame if supplied; otherwise
-    delegates to ``portfolio_returns(price_source=...)`` per portfolio.
+    delegates to ``portfolio_returns(price_source=...)`` per portfolio. When
+    ``fx_series_usd_sgd`` is supplied, USD-reported portfolios are converted
+    to SGD per-day inside ``portfolio_returns``.
+
+    When ``strict=True`` and any portfolio fails to produce a return series,
+    raises :class:`PortfolioDroppedError` listing every drop. Otherwise emits a
+    ``UserWarning`` per drop and continues with the surviving portfolios.
     """
     series = []
+    dropped: list[tuple[str, str]] = []
     for p in portfolios:
         try:
             s = portfolio_returns(
@@ -132,11 +661,21 @@ def _build_returns_panel(
                 end=end,
                 price_source=price_source,
                 returns=returns,
+                fx_series_usd_sgd=fx_series_usd_sgd,
             )
         except Exception as exc:
+            reason = f"{type(exc).__name__}: {exc}"
+            dropped.append((p.name, reason))
             warnings.warn(f"Skipping {p.name!r} in returns panel: {exc}", stacklevel=2)
             continue
+        if s.isna().all():
+            reason = "all-NaN return series (weights resolved to 0?)"
+            dropped.append((p.name, reason))
+            warnings.warn(f"Skipping {p.name!r}: {reason}", stacklevel=2)
+            continue
         series.append(s)
+    if dropped and strict:
+        raise PortfolioDroppedError(dropped)
     if not series:
         return pd.DataFrame()
     return pd.concat(series, axis=1)
@@ -154,14 +693,17 @@ def correlation_matrix(
     end: date | datetime | None = None,
     price_source: Any | None = None,
     returns: pd.DataFrame | None = None,
+    fx_series_usd_sgd: pd.Series | None = None,
 ) -> pd.DataFrame:
-    """Pairwise return correlation across all portfolios over the common window."""
+    """Pairwise return correlation across ``HOLDING``-tagged portfolios."""
+    holdings_books = [p for p in portfolios if Role.HOLDING in p.roles]
     panel = _build_returns_panel(
-        portfolios,
+        holdings_books,
         price_source=price_source,
         returns=returns,
         start=start,
         end=end,
+        fx_series_usd_sgd=fx_series_usd_sgd,
     )
     if panel.empty:
         return pd.DataFrame()
@@ -173,15 +715,45 @@ def correlation_matrix(
 
 
 def correlation_figure(corr: pd.DataFrame) -> go.Figure:
+    n = len(corr)
+    height = max(320, min(460, 60 + 30 * n))
+    masked = corr.mask(np.eye(n, dtype=bool))
+
+    off_diag = masked.values[~np.isnan(masked.values)]
+    if off_diag.size:
+        zmin = max(-1.0, float(np.nanmin(off_diag)) - 0.05)
+        zmax = min(1.0, float(np.nanmax(off_diag)) + 0.05)
+        if zmin < 0:
+            zmin, zmax = -max(abs(zmin), abs(zmax)), max(abs(zmin), abs(zmax))
+    else:
+        zmin, zmax = -1.0, 1.0
+
+    text_matrix = [
+        ["" if i == j or pd.isna(corr.iloc[i, j]) else f"{corr.iloc[i, j]:.2f}" for j in range(n)]
+        for i in range(n)
+    ]
+
     fig = px.imshow(
-        corr,
-        zmin=-1,
-        zmax=1,
+        masked,
+        zmin=zmin,
+        zmax=zmax,
         color_continuous_scale="RdBu_r",
         aspect="auto",
-        text_auto=".2f",
     )
-    return apply_theme(fig, title="Portfolio correlation", height=520)
+    fig.update_traces(
+        text=text_matrix,
+        texttemplate="%{text}",
+        textfont={"size": 10},
+        hovertemplate="%{y} × %{x}<br>ρ=%{z:.3f}<extra></extra>",
+    )
+    fig = apply_theme(fig, title="Portfolio correlation", height=height)
+    fig.update_layout(
+        margin={"l": 140, "r": 30, "t": 60, "b": 100},
+        xaxis={"tickangle": -35, "tickfont": {"size": 11}},
+        yaxis={"tickfont": {"size": 11}},
+        coloraxis_colorbar={"thickness": 12, "len": 0.75},
+    )
+    return fig
 
 
 # ---------------------------------------------------------------------------
@@ -242,6 +814,7 @@ def risk_contribution(
     end: date | datetime | None = None,
     price_source: Any | None = None,
     returns: pd.DataFrame | None = None,
+    fx_rate_usd_sgd: float | None = None,
 ) -> dict[str, pd.DataFrame]:
     """Risk contribution per holding and per portfolio for the combined book.
 
@@ -256,28 +829,64 @@ def risk_contribution(
     """
     holdings_books = [p for p in portfolios if Role.HOLDING in p.roles]
     if not holdings_books:
-        empty = pd.DataFrame(columns=["name", "weight", "contribution", "pct_total"])
-        return {"by_holding": empty.copy(), "by_portfolio": empty.copy()}
+        empty_holding = pd.DataFrame(
+            columns=["holding", "weight", "value", "contribution", "pct_total", "delta_vol"]
+        )
+        empty_portfolio = pd.DataFrame(
+            columns=["name", "weight", "value", "contribution", "pct_total", "delta_vol"]
+        )
+        empty_ticker = pd.DataFrame(
+            columns=["ticker", "weight", "value", "contribution", "pct_total", "delta_vol", "portfolios"]
+        )
+        return {
+            "by_holding": empty_holding,
+            "by_portfolio": empty_portfolio,
+            "by_ticker": empty_ticker,
+        }
 
     if returns is None:
         if price_source is None:
             raise ValueError("Either price_source or returns must be supplied.")
-        symbols = sorted({h.metadata.ticker for p in holdings_books for h in p.holdings})
+        symbols = sorted({
+            h.metadata.ticker for p in holdings_books for h in p.holdings
+            if not h.metadata.ticker.startswith("CASH_")
+        })
         s_start = start if start is not None else date(2015, 1, 1)
         s_end = end if end is not None else date.today()
         returns = price_source.get_returns(symbols, s_start, s_end)
     elif start is not None or end is not None:
         returns = returns.loc[start:end]  # type: ignore[misc]
 
+    from hailmary.allocation.returns import synthesise_cash_returns
+
+    cash_tickers = {
+        h.metadata.ticker for p in holdings_books for h in p.holdings
+        if h.metadata.ticker.startswith("CASH_")
+    }
+    if cash_tickers:
+        returns = synthesise_cash_returns(returns, cash_tickers)
+
+    fx = fx_rate_usd_sgd if fx_rate_usd_sgd is not None else 1.0
+
+    def _value_sgd(portfolio: Portfolio) -> float:
+        return (
+            portfolio.total_value * fx
+            if portfolio.currency.upper() == "USD"
+            else portfolio.total_value
+        )
+
+    total_value = sum(_value_sgd(p) for p in holdings_books)
     holding_records: list[dict[str, Any]] = []
-    total_value = sum(p.total_value for p in holdings_books)
     for p in holdings_books:
+        p_value = _value_sgd(p)
         for h in p.holdings:
+            holding_value = h.weight * p_value
             holding_records.append(
                 {
                     "portfolio": p.name,
                     "ticker": h.metadata.ticker,
-                    "weight_in_book": (h.weight * p.total_value) / total_value,
+                    "weight_in_book": holding_value / total_value if total_value > 0 else 0.0,
+                    "value_sgd": holding_value,
                 }
             )
     holdings_df = pd.DataFrame(holding_records)
@@ -285,8 +894,20 @@ def risk_contribution(
     book_weights = holdings_df.groupby("ticker")["weight_in_book"].sum()
     available = [t for t in book_weights.index if t in returns.columns]
     if not available:
-        empty = pd.DataFrame(columns=["name", "weight", "contribution", "pct_total"])
-        return {"by_holding": empty.copy(), "by_portfolio": empty.copy()}
+        empty_holding = pd.DataFrame(
+            columns=["holding", "weight", "value", "contribution", "pct_total", "delta_vol"]
+        )
+        empty_portfolio = pd.DataFrame(
+            columns=["name", "weight", "value", "contribution", "pct_total", "delta_vol"]
+        )
+        empty_ticker = pd.DataFrame(
+            columns=["ticker", "weight", "value", "contribution", "pct_total", "delta_vol", "portfolios"]
+        )
+        return {
+            "by_holding": empty_holding,
+            "by_portfolio": empty_portfolio,
+            "by_ticker": empty_ticker,
+        }
 
     rets = returns[available].dropna(how="any")
     book_weights = book_weights.loc[available] / book_weights.loc[available].sum()
@@ -298,19 +919,33 @@ def risk_contribution(
 
     component = np.zeros_like(w) if portfolio_vol == 0.0 else w * cov_w / portfolio_vol
 
+    ticker_portfolios = (
+        holdings_df.groupby("ticker")["portfolio"]
+        .agg(lambda s: ", ".join(sorted(set(s))))
+    )
+    ticker_values = holdings_df.groupby("ticker")["value_sgd"].sum()
     by_ticker = pd.DataFrame(
         {
-            "name": book_weights.index,
+            "ticker": book_weights.index,
             "weight": book_weights.values,
+            "value": book_weights.index.map(ticker_values).fillna(0.0),
             "contribution": component,
         }
     )
-    by_ticker["pct_total"] = by_ticker["contribution"] / portfolio_vol if portfolio_vol > 0 else 0.0
+    by_ticker["pct_total"] = (
+        by_ticker["contribution"] / portfolio_vol if portfolio_vol > 0 else 0.0
+    )
+    by_ticker["delta_vol"] = _delta_vol_per_ticker(
+        holdings_df, cov.values, available, portfolio_vol
+    )
+    by_ticker["portfolios"] = by_ticker["ticker"].map(ticker_portfolios).fillna("")
 
     holdings_df["ticker_contribution"] = holdings_df["ticker"].map(
-        dict(zip(by_ticker["name"], by_ticker["contribution"], strict=False))
+        dict(zip(by_ticker["ticker"], by_ticker["contribution"], strict=False))
     )
-    book_weights_per_ticker = dict(zip(by_ticker["name"], by_ticker["weight"], strict=False))
+    book_weights_per_ticker = dict(
+        zip(by_ticker["ticker"], by_ticker["weight"], strict=False)
+    )
     holdings_df["share_of_ticker"] = holdings_df.apply(
         lambda r: (
             r["weight_in_book"] / book_weights_per_ticker[r["ticker"]]
@@ -324,21 +959,31 @@ def risk_contribution(
     )
 
     by_holding = (
-        holdings_df.assign(name=lambda d: d["portfolio"] + " · " + d["ticker"])
-        .loc[:, ["name", "weight_in_book", "contribution"]]
-        .rename(columns={"weight_in_book": "weight"})
+        holdings_df.assign(holding=lambda d: d["portfolio"] + " · " + d["ticker"])
+        .loc[:, ["holding", "weight_in_book", "value_sgd", "contribution"]]
+        .rename(columns={"weight_in_book": "weight", "value_sgd": "value"})
     )
     by_holding["pct_total"] = (
         by_holding["contribution"] / portfolio_vol if portfolio_vol > 0 else 0.0
     )
+    by_holding["delta_vol"] = _delta_vol_per_holding(
+        holdings_df, cov.values, available, portfolio_vol
+    )
 
     by_portfolio = (
         holdings_df.groupby("portfolio", as_index=False)
-        .agg(weight=("weight_in_book", "sum"), contribution=("contribution", "sum"))
+        .agg(
+            weight=("weight_in_book", "sum"),
+            value=("value_sgd", "sum"),
+            contribution=("contribution", "sum"),
+        )
         .rename(columns={"portfolio": "name"})
     )
     by_portfolio["pct_total"] = (
         by_portfolio["contribution"] / portfolio_vol if portfolio_vol > 0 else 0.0
+    )
+    by_portfolio["delta_vol"] = _delta_vol_per_portfolio(
+        holdings_df, cov.values, available, portfolio_vol
     )
 
     return {
@@ -348,7 +993,100 @@ def risk_contribution(
         "by_portfolio": by_portfolio.sort_values("contribution", ascending=False).reset_index(
             drop=True
         ),
+        "by_ticker": by_ticker.sort_values("contribution", ascending=False).reset_index(
+            drop=True
+        ),
     }
+
+
+def _book_vol_from_holdings(
+    holdings_df: pd.DataFrame,
+    cov_matrix: np.ndarray,
+    tickers: list[str],
+) -> float:
+    """Compute σ_p from a holdings DataFrame and a ticker-indexed covariance matrix.
+
+    Weights are renormalised over the *available* tickers (those present in
+    ``cov_matrix``) to match the convention used by the parent ``risk_contribution``
+    function. Holdings whose ticker isn't in ``cov_matrix`` (e.g. ``CASH_*``) are
+    effectively ignored for this risk calculation.
+    """
+    grouped = holdings_df.groupby("ticker")["weight_in_book"].sum()
+    raw = grouped.reindex(tickers).fillna(0.0)
+    total = float(raw.sum())
+    if total <= 0:
+        return 0.0
+    ticker_weights = (raw / total).values
+    var = float(ticker_weights @ cov_matrix @ ticker_weights)
+    return float(np.sqrt(max(var, 0.0)))
+
+
+def _delta_vol_per_holding(
+    holdings_df: pd.DataFrame,
+    cov_matrix: np.ndarray,
+    tickers: list[str],
+    sigma_p: float,
+) -> np.ndarray:
+    """For each holding row: σ_p − σ_p when that single (portfolio, ticker) row is removed.
+
+    Remaining holdings are renormalised so weights sum to 1 again. Positive → removing
+    this row reduces book vol (a risk source). Negative → removing it increases book
+    vol (a diversifier).
+    """
+    deltas = np.zeros(len(holdings_df))
+    for i in range(len(holdings_df)):
+        without = holdings_df.drop(holdings_df.index[i])
+        if without.empty or without["weight_in_book"].sum() <= 0:
+            deltas[i] = sigma_p
+            continue
+        sigma_ex = _book_vol_from_holdings(without, cov_matrix, tickers)
+        deltas[i] = sigma_p - sigma_ex
+    return deltas
+
+
+def _delta_vol_per_ticker(
+    holdings_df: pd.DataFrame,
+    cov_matrix: np.ndarray,
+    tickers: list[str],
+    sigma_p: float,
+) -> np.ndarray:
+    """For each ticker: σ_p − σ_p when every row holding that ticker is removed.
+
+    Aggregates across portfolios — answers "what if I had zero exposure to this
+    underlying anywhere in the book?"
+    """
+    deltas = np.zeros(len(tickers))
+    for i, t in enumerate(tickers):
+        without = holdings_df[holdings_df["ticker"] != t]
+        if without.empty or without["weight_in_book"].sum() <= 0:
+            deltas[i] = sigma_p
+            continue
+        sigma_ex = _book_vol_from_holdings(without, cov_matrix, tickers)
+        deltas[i] = sigma_p - sigma_ex
+    return deltas
+
+
+def _delta_vol_per_portfolio(
+    holdings_df: pd.DataFrame,
+    cov_matrix: np.ndarray,
+    tickers: list[str],
+    sigma_p: float,
+) -> np.ndarray:
+    """For each portfolio: σ_p − σ_p when that entire portfolio's holdings are removed.
+
+    Returned in the order produced by ``groupby('portfolio').agg(...)`` — sorted
+    alphabetically by portfolio name.
+    """
+    portfolio_names = sorted(holdings_df["portfolio"].unique())
+    deltas = np.zeros(len(portfolio_names))
+    for i, p_name in enumerate(portfolio_names):
+        without = holdings_df[holdings_df["portfolio"] != p_name]
+        if without.empty or without["weight_in_book"].sum() <= 0:
+            deltas[i] = sigma_p
+            continue
+        sigma_ex = _book_vol_from_holdings(without, cov_matrix, tickers)
+        deltas[i] = sigma_p - sigma_ex
+    return deltas
 
 
 # ---------------------------------------------------------------------------
@@ -364,47 +1102,111 @@ def benchmark_comparison(
     price_source: Any | None = None,
     returns: pd.DataFrame | None = None,
     risk_free_rate: float = 0.0,
+    fx_series_usd_sgd: pd.Series | None = None,
+    fx_rate_usd_sgd: float | None = None,
+    align_window: bool = True,
+    target_ann_return: float = 0.05,
 ) -> pd.DataFrame:
     """Sharpe / max-DD / annualised-vol per portfolio, with deltas vs each benchmark.
 
     Returns a DataFrame indexed by portfolio name, columns include the three
     base metrics plus ``sharpe_delta_vs_<bench>``, ``max_dd_delta_vs_<bench>``,
     and ``vol_delta_vs_<bench>`` for each ``MANAGED_BENCHMARK`` portfolio.
-    Custom + benchmark portfolios both get rows; rows for non-overlapping
+    Only ``HOLDING``-tagged portfolios contribute rows; rows for non-overlapping
     history are dropped.
     """
+    holdings_books = [p for p in portfolios if Role.HOLDING in p.roles]
     panel = _build_returns_panel(
-        portfolios,
+        holdings_books,
         price_source=price_source,
         returns=returns,
         start=start,
         end=end,
+        fx_series_usd_sgd=fx_series_usd_sgd,
     )
     if panel.empty:
         return pd.DataFrame()
 
-    benchmarks = [p.name for p in portfolios if Role.MANAGED_BENCHMARK in p.roles]
+    benchmarks = [p.name for p in holdings_books if Role.MANAGED_BENCHMARK in p.roles]
     if not benchmarks:
         warnings.warn(
             "No MANAGED_BENCHMARK portfolios — returning base metrics only.",
             stacklevel=2,
         )
 
-    # Each portfolio's metrics are computed on its native return-series history
-    # (dropping leading NaNs only). Otherwise a recently-launched holding in
-    # one portfolio would truncate every other portfolio's metrics window.
-    base_rows = {}
-    for col in panel.columns:
-        series = panel[col].dropna()
-        if series.empty:
-            continue
+    fx = fx_rate_usd_sgd if fx_rate_usd_sgd is not None else 1.0
+    if fx == 1.0 and fx_series_usd_sgd is not None and not fx_series_usd_sgd.empty:
+        fx = float(fx_series_usd_sgd.dropna().iloc[-1])
+
+    def _value_sgd(portfolio: Portfolio) -> float:
+        return (
+            portfolio.total_value * fx
+            if portfolio.currency.upper() == "USD"
+            else portfolio.total_value
+        )
+
+    value_by_name = {p.name: _value_sgd(p) for p in holdings_books}
+
+    common_start = (
+        max(panel[c].dropna().index.min() for c in panel.columns) if align_window else None
+    )
+
+    def _metric_row(series: pd.Series, name: str | None) -> dict[str, Any]:
         m = PerformanceMetrics(series, risk_free_rate=risk_free_rate)
-        base_rows[col] = {
+        cum = float((1.0 + series).prod() - 1.0)
+        this_year = series.index.max().year
+        ytd = series[series.index.year == this_year]
+        ytd_cum = float((1.0 + ytd).prod() - 1.0) if not ytd.empty else float("nan")
+        return {
+            "value": value_by_name.get(name, float("nan")) if name else float("nan"),
+            "total_return": cum,
+            "ann_return": m.annualised_return,
+            "ytd_return": ytd_cum,
             "sharpe": m.sharpe,
             "max_dd": m.max_drawdown,
             "annualised_vol": m.annualised_vol,
             "n_days": len(series),
         }
+
+    # Per-portfolio rows: aligned window when align_window=True (so deltas are
+    # apples-to-apples), each portfolio's native history otherwise.
+    base_rows = {}
+    if align_window:
+        aligned_panel = panel.loc[common_start:].dropna(how="any") if common_start else panel
+        for col in aligned_panel.columns:
+            series = aligned_panel[col]
+            if series.empty:
+                continue
+            base_rows[col] = _metric_row(series, col)
+    else:
+        for col in panel.columns:
+            series = panel[col].dropna()
+            if series.empty:
+                continue
+            base_rows[col] = _metric_row(series, col)
+
+    # Combined book row
+    weight_map = {n: v for n, v in value_by_name.items() if n in panel.columns}
+    total_weight = sum(weight_map.values())
+    if total_weight > 0:
+        weights = pd.Series(weight_map) / total_weight
+        sub_panel = panel[weights.index]
+        if align_window:
+            aligned = sub_panel.loc[common_start:].dropna(how="any")
+            combined_return = (
+                (aligned * weights).sum(axis=1) if not aligned.empty else pd.Series(dtype=float)
+            )
+        else:
+            available = sub_panel.notna().astype(float)
+            eff = available.mul(weights, axis=1)
+            row_sums = eff.sum(axis=1).replace(0.0, np.nan)
+            eff = eff.div(row_sums, axis=0)
+            combined_return = (sub_panel.fillna(0.0) * eff).sum(axis=1).dropna()
+        if not combined_return.empty:
+            combined_row = _metric_row(combined_return, None)
+            combined_row["value"] = float(total_weight)
+            base_rows = {"Combined book": combined_row, **base_rows}
+
     out = pd.DataFrame(base_rows).T
 
     for bench in benchmarks:
@@ -413,6 +1215,7 @@ def benchmark_comparison(
         out[f"sharpe_delta_vs_{bench}"] = out["sharpe"] - out.loc[bench, "sharpe"]
         out[f"max_dd_delta_vs_{bench}"] = out["max_dd"] - out.loc[bench, "max_dd"]
         out[f"vol_delta_vs_{bench}"] = out["annualised_vol"] - out.loc[bench, "annualised_vol"]
+    out.attrs["target_ann_return"] = float(target_ann_return)
     return out
 
 
@@ -433,7 +1236,13 @@ def render_html_report(
     price_source: Any | None = None,
     returns: pd.DataFrame | None = None,
     redundancy_threshold: float = 0.85,
+    fx_rate_usd_sgd: float | None = None,
+    fx_series_usd_sgd: pd.Series | None = None,
     title: str = "Allocation Diagnostic",
+    strict: bool = True,
+    align_window: bool = True,
+    target_ann_return: float = 0.05,
+    reconciliation_as_of: date | datetime | None = None,
 ) -> Path:
     """Run all diagnostics and write a self-contained HTML report.
 
@@ -448,6 +1257,45 @@ def render_html_report(
             'Install with: pip install -e ".[allocation]"'
         )
 
+    holdings_books = [p for p in portfolios if Role.HOLDING in p.roles]
+    if strict and holdings_books:
+        _build_returns_panel(
+            holdings_books,
+            price_source=price_source,
+            returns=returns,
+            start=start,
+            end=end,
+            fx_series_usd_sgd=fx_series_usd_sgd,
+            strict=True,
+        )
+
+    book_perf = book_performance(
+        portfolios,
+        start=start,
+        end=end,
+        price_source=price_source,
+        returns=returns,
+        fx_rate_usd_sgd=fx_rate_usd_sgd,
+        fx_series_usd_sgd=fx_series_usd_sgd,
+        align_window=align_window,
+    )
+    reconciliation_end = (
+        reconciliation_as_of
+        if reconciliation_as_of is not None
+        else (end if end is not None else date.today())
+    )
+    reconciliation = portfolio_reconciliation(
+        portfolios,
+        end=reconciliation_end,
+        price_source=price_source,
+        returns=returns,
+        fx_series_usd_sgd=fx_series_usd_sgd,
+    )
+    reconciliation_as_of_label = (
+        reconciliation_end.isoformat()
+        if isinstance(reconciliation_end, date)
+        else str(reconciliation_end)
+    )
     exposure = combined_exposure(portfolios)
     corr = correlation_matrix(
         portfolios,
@@ -455,14 +1303,19 @@ def render_html_report(
         end=end,
         price_source=price_source,
         returns=returns,
+        fx_series_usd_sgd=fx_series_usd_sgd,
     )
     pairs = redundancy_pairs(corr, threshold=redundancy_threshold, portfolios=portfolios)
+    effective_fx = fx_rate_usd_sgd
+    if effective_fx is None and fx_series_usd_sgd is not None and not fx_series_usd_sgd.empty:
+        effective_fx = float(fx_series_usd_sgd.dropna().iloc[-1])
     risk = risk_contribution(
         portfolios,
         start=start,
         end=end,
         price_source=price_source,
         returns=returns,
+        fx_rate_usd_sgd=effective_fx,
     )
     benchmarks = benchmark_comparison(
         portfolios,
@@ -470,37 +1323,53 @@ def render_html_report(
         end=end,
         price_source=price_source,
         returns=returns,
+        fx_series_usd_sgd=fx_series_usd_sgd,
+        fx_rate_usd_sgd=effective_fx,
+        align_window=align_window,
+        target_ann_return=target_ann_return,
     )
 
     figs: list[tuple[str, go.Figure]] = []
-    if any(not df.empty for df in exposure.values()):
-        figs.append(("Combined-book exposure", combined_exposure_figure(exposure)))
+    if not book_perf["nav"].empty:
+        figs.append(("nav", equity_curve_figure(book_perf["nav"])))
     if not corr.empty:
-        figs.append(("Portfolio correlation", correlation_figure(corr)))
+        figs.append(("correlation", correlation_figure(corr)))
 
-    fig_html: list[tuple[str, str]] = [
-        (
-            label,
-            pio.to_html(
-                fig,
-                include_plotlyjs="inline" if i == 0 else False,
-                full_html=False,
-                config={"displayModeBar": False},
-            ),
+    fig_html: dict[str, str] = {}
+    for i, (key, fig) in enumerate(figs):
+        fig_html[key] = pio.to_html(
+            fig,
+            include_plotlyjs="inline" if i == 0 else False,
+            full_html=False,
+            config={"displayModeBar": False},
         )
-        for i, (label, fig) in enumerate(figs)
-    ]
+
+    exposure_cards = _exposure_cards_to_html(
+        exposure, include_plotlyjs=("nav" not in fig_html)
+    )
+
+    statement_dates = sorted({p.statement_date for p in portfolios})
+    statement_date_label = (
+        statement_dates[-1].isoformat() if statement_dates else "unknown"
+    )
 
     template = _load_template()
     rendered = template.render(
         title=title,
         generated_at=datetime.now().isoformat(timespec="seconds"),
+        statement_date=statement_date_label,
         portfolio_count=len(portfolios),
-        figures=fig_html,
-        exposure=_exposure_to_html(exposure),
+        nav_chart=fig_html.get("nav", ""),
+        correlation_chart=fig_html.get("correlation", ""),
+        exposure_cards=exposure_cards,
+        book_performance=_book_performance_to_html(book_perf),
+        reconciliation=_reconciliation_to_html(reconciliation),
+        reconciliation_as_of=reconciliation_as_of_label,
         redundancy=_redundancy_to_html(pairs, threshold=redundancy_threshold),
         risk_by_portfolio=_risk_to_html(risk["by_portfolio"]),
         risk_by_holding=_risk_to_html(risk["by_holding"]),
+        risk_by_ticker=_risk_to_html(risk["by_ticker"]),
+        risk_callout=_risk_callout_to_html(risk["by_portfolio"]),
         benchmarks=_benchmarks_to_html(benchmarks),
     )
     out = Path(output_path)
@@ -521,14 +1390,189 @@ def _load_template() -> Any:
     return jinja2.Environment(autoescape=True).from_string(_FALLBACK_TEMPLATE)
 
 
+def _book_performance_to_html(perf: dict[str, Any]) -> str:
+    if perf["n_days"] == 0:
+        return "<p>No combined-book history available.</p>"
+    aum = perf["aum"]
+    currency = perf.get("currency", "SGD")
+    fx = perf.get("fx_rate_usd_sgd")
+    facts = [
+        (f"Total AUM ({currency}, HOLDING-tagged)", _fmt_compact(aum)),
+        ("Days of history", f"{perf['n_days']:,}"),
+    ]
+    if fx is not None:
+        facts.append(("USDSGD applied", f"{fx:.4f}"))
+    summary_cells = "".join(f"<tr><th>{label}</th><td>{value}</td></tr>" for label, value in facts)
+    summary = f'<table class="ds-table ds-summary">{summary_cells}</table>'
+    footnote = (
+        '<p class="footnote">'
+        "<strong>AUM</strong> is the sum of <code>total_value</code> across <code>HOLDING</code>-tagged "
+        f"portfolios (cash trio included; see book_config). USD-reported portfolios are converted to {currency} "
+        "at the rate shown above. "
+        "<strong>Returns are SGD-base</strong>: USD-portfolio return series are compounded with daily USDSGD "
+        "changes via <code>r_SGD = (1 + r_USD)·(1 + Δfx) − 1</code>, so Sharpe / vol / drawdown / NAV all reflect "
+        "the experience of an SGD-base investor (10.9b done). "
+        "<em>Cum. return</em> is compounded, <code>Π(1+rᵢ) − 1</code>; per-window <em>Ann. return</em> annualises that to "
+        "<code>252/N</code> trading days for cross-window comparability. "
+        "<em>Cash trio</em> (Simple USD ≈ 5% p.a. via US short-rate proxy, Simple SGD + Guitsa ≈ 1.5% p.a. per "
+        "stashaway.sg/simple-var3) is visible as a replacement candidate; their inclusion pulls combined-book "
+        "Sharpe and vol downward vs prior runs that hid them. "
+        '<em>Caveat</em>: <strong>Risk contribution</strong> below is computed per-ticker on native-currency '
+        "returns (FX adjustment not applied at the ticker level); meaningful for relative ranking, not for "
+        "SGD-precise risk decomposition.</p>"
+    )
+
+    windowed = perf.get("windowed")
+    if windowed is None or windowed.empty:
+        return summary + footnote
+
+    display = windowed.copy()
+    display["cum_dollar"] = display["cum_return"] * aum
+    display = display.rename(
+        columns={
+            "period": "Period",
+            "cum_return": "Cum. return",
+            "ann_return": "Ann. return",
+            "cum_dollar": "Cum. $",
+            "ann_vol": "Ann. vol",
+            "sharpe": "Sharpe (ann.)",
+            "max_dd": "Max DD",
+            "days": "Days",
+        }
+    )[["Period", "Cum. return", "Cum. $", "Ann. return", "Ann. vol", "Sharpe (ann.)", "Max DD", "Days"]]
+
+    styler = (
+        display.style.format(
+            {
+                "Cum. return": "{:+.2%}".format,
+                "Ann. return": "{:+.2%}".format,
+                "Cum. $": _fmt_compact_signed,
+                "Ann. vol": "{:.2%}".format,
+                "Sharpe (ann.)": "{:.2f}".format,
+                "Max DD": "{:.2%}".format,
+                "Days": "{:,}".format,
+            },
+            na_rep="—",
+        )
+        .map(_style_pos_neg, subset=["Cum. return", "Ann. return", "Cum. $"])
+        .map(_style_sharpe, subset=["Sharpe (ann.)"])
+        .map(_style_dd, subset=["Max DD"])
+        .hide(axis="index")
+        .set_table_attributes('class="ds-table ds-windowed"')
+    )
+    return summary + footnote + styler.to_html()
+
+
+def _reconciliation_to_html(df: pd.DataFrame) -> str:
+    if df.empty:
+        return "<p>No portfolios available to reconcile.</p>"
+
+    total_stmt_sgd = float(df["stmt_sgd"].sum())
+    total_today_sgd = float(df["today_sgd"].sum())
+    total_row = pd.DataFrame(
+        [
+            {
+                "portfolio": "Total",
+                "currency": "",
+                "stmt_native": float("nan"),  # mixed currencies — can't sum
+                "stmt_sgd": total_stmt_sgd,
+                "today_native": float("nan"),
+                "today_sgd": total_today_sgd,
+                "delta_sgd": total_today_sgd - total_stmt_sgd,
+                "return_native": float("nan"),
+                "return_sgd": (
+                    (total_today_sgd / total_stmt_sgd - 1.0) if total_stmt_sgd > 0 else 0.0
+                ),
+            }
+        ]
+    )
+    display = pd.concat([df, total_row], ignore_index=True).rename(
+        columns={
+            "portfolio": "Portfolio",
+            "currency": "Curr",
+            "stmt_native": "Stmt (native)",
+            "stmt_sgd": "Stmt (SGD)",
+            "today_native": "Today (native)",
+            "today_sgd": "Today (SGD)",
+            "delta_sgd": "Δ SGD",
+            "return_native": "Δ% native",
+            "return_sgd": "Δ% SGD",
+        }
+    )
+    formatters = {
+        "Stmt (native)": _fmt_compact_precise,
+        "Stmt (SGD)": _fmt_compact_precise,
+        "Today (native)": _fmt_compact_precise,
+        "Today (SGD)": _fmt_compact_precise,
+        "Δ SGD": _fmt_compact_precise_signed,
+        "Δ% native": "{:+.2%}".format,
+        "Δ% SGD": "{:+.2%}".format,
+    }
+    total_idx = len(display) - 1
+    styler = (
+        display.style.format(formatters, na_rep="—")
+        .map(_style_pos_neg, subset=["Δ SGD", "Δ% native", "Δ% SGD"])
+        .set_table_styles(
+            [{"selector": f"tbody tr:nth-child({total_idx + 1}) td",
+              "props": "font-weight: 600; border-top: 2px solid #30363d;"}],
+            overwrite=False,
+        )
+        .hide(axis="index")
+        .set_table_attributes('class="ds-table"')
+    )
+    return styler.to_html()
+
+
 def _exposure_to_html(exposure: dict[str, pd.DataFrame]) -> dict[str, str]:
     return {
         dim.replace("_", " ").title(): df.to_html(
-            index=False, float_format="{:.2%}".format, classes="ds-table"
+            index=False,
+            formatters={
+                "value": _fmt_compact,
+                "weight": "{:.2%}".format,
+            },
+            classes="ds-table",
+            border=0,
         )
         for dim, df in exposure.items()
         if not df.empty
     }
+
+
+def _exposure_cards_to_html(
+    exposure: dict[str, pd.DataFrame],
+    *,
+    include_plotlyjs: bool = False,
+) -> str:
+    """Build a 3-column grid of donut+table cards, one per exposure dimension."""
+    dims = [("asset_class", "Asset Class"), ("region", "Region"), ("sector", "Sector")]
+    nonempty = [(key, label) for key, label in dims if not exposure.get(key, pd.DataFrame()).empty]
+    if not nonempty:
+        return ""
+
+    cards: list[str] = []
+    for i, (key, label) in enumerate(nonempty):
+        df = exposure[key]
+        donut = single_exposure_donut(df, title=label)
+        donut_html = pio.to_html(
+            donut,
+            include_plotlyjs="inline" if (i == 0 and include_plotlyjs) else False,
+            full_html=False,
+            config={"displayModeBar": False},
+        )
+        table_html = df.to_html(
+            index=False,
+            formatters={
+                "value": _fmt_compact,
+                "weight": "{:.2%}".format,
+            },
+            classes="ds-table ds-exposure",
+            border=0,
+        )
+        cards.append(
+            f'<div class="exposure-card">{donut_html}{table_html}</div>'
+        )
+    return f'<div class="exposure-grid">{"".join(cards)}</div>'
 
 
 def _redundancy_to_html(
@@ -536,23 +1580,232 @@ def _redundancy_to_html(
     *,
     threshold: float,
 ) -> str:
+    intro = (
+        '<p class="footnote">Pairs of portfolios whose daily return series move in lockstep — '
+        f"correlation ≥ {threshold:.2f} over the common-history window. These are duplicate "
+        "exposures: holding both adds management overhead without diversification benefit. "
+        '<em>"Review"</em> flags the portfolio worth consolidating <em>into</em> the other; '
+        "<code>PROTECTED</code> portfolios (e.g. General SRS) never appear in this column because their "
+        "tax-locking makes them un-removable.</p>"
+    )
     rows = list(pairs)
     if not rows:
-        return f"<p>No portfolio pairs above threshold {threshold:.2f}.</p>"
-    df = pd.DataFrame(rows, columns=["a", "b", "rho", "candidate"])
-    return df.to_html(index=False, float_format="{:.3f}".format, classes="ds-table")
+        return intro + f"<p>No portfolio pairs above threshold {threshold:.2f}.</p>"
+    df = pd.DataFrame(rows, columns=["a", "b", "rho", "candidate"]).rename(
+        columns={
+            "a": "Portfolio A",
+            "b": "Portfolio B",
+            "rho": "Correlation",
+            "candidate": "Review",
+        }
+    )
+    styler = (
+        df.style.format({"Correlation": "{:.3f}".format})
+        .map(_style_rho, subset=["Correlation"])
+        .hide(axis="index")
+        .set_table_attributes('class="ds-table"')
+    )
+    return intro + styler.to_html()
 
 
 def _risk_to_html(df: pd.DataFrame) -> str:
     if df.empty:
         return "<p>No holdings to attribute.</p>"
-    return df.to_html(index=False, float_format="{:.4f}".format, classes="ds-table")
+    display = df.rename(
+        columns={
+            "portfolio": "Portfolio",
+            "ticker": "Ticker",
+            "name": "Portfolio",
+            "holding": "Portfolio · Ticker",
+            "weight": "Weight",
+            "value": "Value (SGD)",
+            "contribution": "Vol contribution (ann.)",
+            "pct_total": "% of total risk",
+            "delta_vol": "ΔVol if removed",
+            "portfolios": "Portfolios holding it",
+        }
+    )
+    formatters = {
+        "Weight": "{:.2%}".format,
+        "Value (SGD)": _fmt_compact,
+        "Vol contribution (ann.)": "{:.2%}".format,
+        "% of total risk": "{:.2%}".format,
+    }
+    if "ΔVol if removed" in display.columns:
+        formatters["ΔVol if removed"] = "{:+.2%}".format
+
+    styler = display.style.format(formatters, na_rep="—")
+
+    def _bar_max(col: str) -> float:
+        return float(pd.to_numeric(display[col], errors="coerce").max() or 0.0)
+
+    if "Weight" in display.columns:
+        m = _bar_max("Weight")
+        if m > 0:
+            styler = styler.bar(
+                subset=["Weight"], color="#58a6ff", vmin=0.0, vmax=m, height=70, width=92
+            )
+    if "Value (SGD)" in display.columns:
+        m = _bar_max("Value (SGD)")
+        if m > 0:
+            styler = styler.bar(
+                subset=["Value (SGD)"], color="#a371f7", vmin=0.0, vmax=m, height=70, width=92
+            )
+    if "Vol contribution (ann.)" in display.columns:
+        vc = pd.to_numeric(display["Vol contribution (ann.)"], errors="coerce")
+        bound = float(max(abs(vc.min() or 0.0), abs(vc.max() or 0.0)))
+        if bound > 0:
+            styler = styler.bar(
+                subset=["Vol contribution (ann.)"],
+                color=["#3fb950", "#f85149"],
+                align="zero",
+                vmin=-bound,
+                vmax=bound,
+                height=70,
+                width=92,
+            )
+    if "% of total risk" in display.columns:
+        styler = styler.bar(
+            subset=["% of total risk"], color="#ffa657", vmin=0.0, vmax=1.0, height=70, width=92
+        )
+    if "ΔVol if removed" in display.columns:
+        dv = pd.to_numeric(display["ΔVol if removed"], errors="coerce")
+        bound = float(max(abs(dv.min() or 0.0), abs(dv.max() or 0.0)))
+        if bound > 0:
+            styler = styler.bar(
+                subset=["ΔVol if removed"],
+                color=["#3fb950", "#f85149"],
+                align="zero",
+                vmin=-bound,
+                vmax=bound,
+                height=70,
+                width=92,
+            )
+
+    styler = styler.hide(axis="index").set_table_attributes('class="ds-table"')
+    return styler.to_html()
+
+
+def _risk_callout_to_html(by_portfolio: pd.DataFrame) -> str:
+    """Render a callout with combined book σ_p and a concrete worked example
+    using the largest single risk contributor in the book."""
+    if by_portfolio.empty:
+        return ""
+    sigma_p = float(by_portfolio["contribution"].sum())
+    if sigma_p <= 0:
+        return ""
+    top = by_portfolio.sort_values("contribution", ascending=False).iloc[0]
+    top_name = str(top["name"])
+    top_contrib = float(top["contribution"])
+    top_pct = float(top["pct_total"])
+    top_delta = float(top.get("delta_vol", 0.0))
+    sigma_after = sigma_p - top_delta
+    return f"""
+<div class="ds-callout">
+  <p style="margin: 0 0 6px 0;"><strong>Combined book σ<sub>p</sub> (annualised) =
+     <span style="color:#58a6ff;font-size:15px;">{sigma_p:.2%}</span></strong>
+     &nbsp;— every row's <em>Vol contribution</em> below sums to exactly this number.</p>
+  <p style="margin: 0; color: #8b949e; font-size: 12px;">
+    <strong>Worked example:</strong> {top_name} has the largest <em>Vol contribution</em> of
+    <span style="color:#f85149">{top_contrib:.2%}</span>, which is
+    <span style="color:#f85149">{top_pct:.0%}</span> of the book's
+    {sigma_p:.2%} vol. Selling all of {top_name} and reinvesting proportionally would change
+    σ<sub>p</sub> by <span style="color:#f85149">{-top_delta:+.2%}</span>
+    (new σ<sub>p</sub> ≈ {sigma_after:.2%}). The two numbers differ because the contribution is the
+    math decomposition <em>at current weights</em>, while ΔVol is the discrete effect after the
+    remaining holdings get rebalanced upward to fill the gap.
+  </p>
+</div>
+"""
+
+
+def _style_delta_vol(val: float) -> str:
+    """Red tint when removing the row reduces book vol (risk source);
+    green tint when removing it raises book vol (diversifier)."""
+    if pd.isna(val) or val == 0:
+        return ""
+    if val > 0:
+        a = min(0.45, 0.15 + val * 4.0)
+        return f"background-color: rgba(248, 81, 73, {a:.2f}); color: #f85149;"
+    a = min(0.45, 0.15 + abs(val) * 4.0)
+    return f"background-color: rgba(63, 185, 80, {a:.2f}); color: #3fb950;"
 
 
 def _benchmarks_to_html(df: pd.DataFrame) -> str:
     if df.empty:
         return "<p>No benchmark comparison available (no overlapping return history).</p>"
-    return df.to_html(float_format="{:.3f}".format, classes="ds-table")
+    cols = list(df.columns)
+    sharpe_delta_cols = [c for c in cols if c.startswith("sharpe_delta_vs_")]
+    dd_delta_cols = [c for c in cols if c.startswith("max_dd_delta_vs_")]
+    vol_delta_cols = [c for c in cols if c.startswith("vol_delta_vs_")]
+
+    rename_map: dict[str, str] = {
+        "value": "Value (SGD)",
+        "total_return": "Total return",
+        "ann_return": "Ann. return",
+        "ytd_return": "YTD",
+        "sharpe": "Sharpe",
+        "max_dd": "Max DD",
+        "annualised_vol": "Ann. vol",
+        "n_days": "Days",
+    }
+    for c in sharpe_delta_cols:
+        rename_map[c] = f"ΔSharpe vs {c.removeprefix('sharpe_delta_vs_')}"
+    for c in dd_delta_cols:
+        rename_map[c] = f"ΔMax DD vs {c.removeprefix('max_dd_delta_vs_')}"
+    for c in vol_delta_cols:
+        rename_map[c] = f"ΔVol vs {c.removeprefix('vol_delta_vs_')}"
+
+    display = df.rename(columns=rename_map)
+
+    formatters: dict[str, Any] = {
+        "Value (SGD)": _fmt_compact,
+        "Total return": "{:+.2%}".format,
+        "Ann. return": "{:+.2%}".format,
+        "YTD": "{:+.2%}".format,
+        "Sharpe": "{:.2f}".format,
+        "Max DD": "{:.2%}".format,
+        "Ann. vol": "{:.2%}".format,
+        "Days": "{:,.0f}".format,
+    }
+    sharpe_delta_display = [rename_map[c] for c in sharpe_delta_cols]
+    dd_delta_display = [rename_map[c] for c in dd_delta_cols]
+    vol_delta_display = [rename_map[c] for c in vol_delta_cols]
+    for c in sharpe_delta_display:
+        formatters[c] = "{:+.2f}".format
+    for c in dd_delta_display + vol_delta_display:
+        formatters[c] = "{:+.2%}".format
+
+    target_ann_return = float(df.attrs.get("target_ann_return", 0.05))
+
+    def _style_ann_return(val: float) -> str:
+        if pd.isna(val):
+            return ""
+        if val >= target_ann_return:
+            return "background-color: rgba(63, 185, 80, 0.20); color: #3fb950;"
+        if val >= 0:
+            return "background-color: rgba(210, 153, 34, 0.18); color: #d29922;"
+        return "background-color: rgba(248, 81, 73, 0.20); color: #f85149;"
+
+    styler = display.style.format(formatters, na_rep="—")
+    if "Total return" in display.columns:
+        styler = styler.map(_style_pos_neg, subset=["Total return"])
+    if "Ann. return" in display.columns:
+        styler = styler.map(_style_ann_return, subset=["Ann. return"])
+    if "YTD" in display.columns:
+        styler = styler.map(_style_pos_neg, subset=["YTD"])
+    if "Sharpe" in display.columns:
+        styler = styler.map(_style_sharpe, subset=["Sharpe"])
+    if "Max DD" in display.columns:
+        styler = styler.map(_style_dd, subset=["Max DD"])
+    if sharpe_delta_display:
+        styler = styler.map(_style_pos_neg, subset=sharpe_delta_display)
+    if dd_delta_display:
+        styler = styler.map(_style_dd_delta, subset=dd_delta_display)
+    # ΔVol vs benchmark intentionally left un-tinted — more vol than benchmark isn't
+    # unambiguously good or bad (depends on whether you want more or less risk).
+    styler = styler.set_table_attributes('class="ds-table"')
+    return styler.to_html()
 
 
 _FALLBACK_TEMPLATE = """\
@@ -575,20 +1828,18 @@ _FALLBACK_TEMPLATE = """\
 </head><body>
 <h1>{{ title }}</h1>
 <p class="meta">Generated {{ generated_at }} · {{ portfolio_count }} portfolios ·
-   current-snapshot reconstruction (forward-looking estimate of today's book,
-   not realised history).</p>
+   statement-date-snapshot reconstruction (forward-looking estimate of the book
+   as of the statement date, not realised history).</p>
 
-{% for label, fig in figures %}
-<h2>{{ label }}</h2>
-{{ fig | safe }}
-{% endfor %}
+<h2>Combined book — performance summary</h2>
+{{ book_performance | safe }}
+{% if nav_chart %}{{ nav_chart | safe }}{% endif %}
 
 <h2>Combined-book exposure</h2>
-<div class="columns">
-  {% for label, table in exposure.items() %}
-    <div><h3>{{ label }}</h3>{{ table | safe }}</div>
-  {% endfor %}
-</div>
+{{ exposure_cards | safe }}
+
+<h2>Portfolio correlation</h2>
+{% if correlation_chart %}{{ correlation_chart | safe }}{% endif %}
 
 <h2>Redundancy</h2>
 {{ redundancy | safe }}

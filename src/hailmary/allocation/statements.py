@@ -82,6 +82,13 @@ class ParsedPortfolio:
     currency: str
     total_value: float
     holdings: list[ParsedHolding] = field(default_factory=list)
+    statement_fx_usd_sgd: float | None = None
+    """Statement-date USDSGD rate as reported by Stashaway (e.g. 1.2732).
+
+    Yahoo's USDSGD=X labels dates in UK time, so its "30 Apr close" lands ~7
+    hours before Stashaway's Singapore-EOD snapshot. Using this rate (parsed
+    from the PDF) keeps statement-date SGD totals consistent with the app.
+    """
 
     def weight_sum(self) -> float:
         return sum(h.weight for h in self.holdings)
@@ -148,6 +155,7 @@ class StatementCache:
                 )
                 for row in sub.itertuples(index=False)
             ]
+            stmt_fx = header.get("statement_fx_usd_sgd")
             portfolios.append(
                 ParsedPortfolio(
                     name=header["name"],
@@ -155,6 +163,7 @@ class StatementCache:
                     currency=header["currency"],
                     total_value=float(header["total_value"]),
                     holdings=holdings,
+                    statement_fx_usd_sgd=float(stmt_fx) if stmt_fx is not None else None,
                 )
             )
         logger.debug("Statement cache hit for {}", key.name)
@@ -178,6 +187,7 @@ class StatementCache:
                             "statement_date": p.statement_date.isoformat(),
                             "currency": p.currency,
                             "total_value": p.total_value,
+                            "statement_fx_usd_sgd": p.statement_fx_usd_sgd,
                         }
                         for p in portfolios
                     ]
@@ -202,6 +212,27 @@ def _get_default_cache() -> StatementCache:
 # ---------------------------------------------------------------------------
 
 
+# Stashaway holdings are reported as-of the period-end. The PDF contains two
+# sentences with "as of DD MMM YYYY": one for the opening balance (prior month
+# end) and one for the closing balance (this period's end, which is what we
+# want). Take the LATEST date from all such matches.
+_AS_OF_DATE_PATTERN = re.compile(
+    r"as\s+of\s+(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{4})",
+    re.IGNORECASE,
+)
+# Stashaway reports both opening and closing FX rates: "(1 USD = 1.2868 SGD)"
+# for 31 Mar and "(1 USD = 1.2732 SGD)" for 30 Apr. We want the closing
+# (Singapore-EOD on the statement date), so take the LAST match in the text.
+_USDSGD_RATE_PATTERN = re.compile(
+    r"\(?\s*1\s*USD\s*=\s*(\d+\.\d+)\s*SGD\s*\)?",
+    re.IGNORECASE,
+)
+_DATE_RANGE_PATTERNS = [
+    re.compile(
+        r"\b(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{4})\s*[-–—to]+\s*"
+        r"(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{4})\b"
+    ),
+]
 _DATE_PATTERNS = [
     re.compile(r"\b(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{4})\b"),  # "30 Sep 2024"
     re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b"),  # ISO
@@ -245,6 +276,26 @@ _HEADER_NOISE_PATTERNS = (
 
 
 def _parse_date(text: str) -> date | None:
+    as_of_dates: list[date] = []
+    for m in _AS_OF_DATE_PATTERN.finditer(text):
+        month = _MONTHS.get(m.group(2).lower())
+        if month is None:
+            continue
+        try:
+            as_of_dates.append(date(int(m.group(3)), month, int(m.group(1))))
+        except ValueError:
+            continue
+    if as_of_dates:
+        return max(as_of_dates)
+    for pat in _DATE_RANGE_PATTERNS:
+        m = pat.search(text)
+        if not m:
+            continue
+        day = int(m.group(4))
+        month = _MONTHS.get(m.group(5).lower())
+        year = int(m.group(6))
+        if month is not None:
+            return date(year, month, day)
     for pat in _DATE_PATTERNS:
         m = pat.search(text)
         if not m:
@@ -259,6 +310,18 @@ def _parse_date(text: str) -> date | None:
         elif len(groups) == 3:
             return date(int(groups[0]), int(groups[1]), int(groups[2]))
     return None
+
+
+def _parse_statement_fx_rate(text: str) -> float | None:
+    """Latest "1 USD = X SGD" rate in *text*. Stashaway prints opening then
+    closing; the last match is the closing (statement-date) rate."""
+    matches = list(_USDSGD_RATE_PATTERN.finditer(text))
+    if not matches:
+        return None
+    try:
+        return float(matches[-1].group(1))
+    except (ValueError, IndexError):
+        return None
 
 
 def _parse_number(s: str) -> float | None:
@@ -319,12 +382,16 @@ def parse_statement(
     if statement_date is None:
         raise StatementParseError("Could not find statement date on cover page", path=p)
 
+    statement_fx = _parse_statement_fx_rate(all_text[:8000])
+
     portfolios = _parse_portfolio_blocks(all_text, statement_date=statement_date, path=p)
     if not portfolios:
         raise StatementParseError(
             "No PORTFOLIO DETAILS sections found; PDF format may have changed.",
             path=p,
         )
+    for portfolio in portfolios:
+        portfolio.statement_fx_usd_sgd = statement_fx
 
     for portfolio in portfolios:
         portfolio.validate_weights()

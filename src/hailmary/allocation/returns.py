@@ -8,12 +8,13 @@ of the current book onto historical prices, not a realised track record.
 
 from __future__ import annotations
 
-import warnings
+from collections.abc import Iterable
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import numpy as np
 import pandas as pd
+from loguru import logger
 
 if TYPE_CHECKING:
     from hailmary.allocation.portfolios import Portfolio
@@ -51,6 +52,7 @@ def portfolio_returns(
     price_source: _PriceSource | None = None,
     returns: pd.DataFrame | None = None,
     strict: bool = False,
+    fx_series_usd_sgd: pd.Series | None = None,
 ) -> pd.Series:
     """Reconstruct a portfolio's daily return series.
 
@@ -73,6 +75,12 @@ def portfolio_returns(
         If True, raise :class:`InsufficientHistoryError` when any holding's
         history doesn't cover the requested window. Default is to truncate
         to the common history and emit a warning.
+    fx_series_usd_sgd:
+        Optional daily close series of ``USDSGD=X``. When provided and the
+        portfolio's reporting currency is USD, the return series is converted
+        to SGD via ``r_SGD = (1 + r_USD) · (1 + Δfx) − 1`` per day so the
+        result reflects an SGD-base investor's experience. Without it,
+        USD-reported portfolios stay in USD terms.
     """
     if returns is None:
         if price_source is None:
@@ -89,12 +97,19 @@ def portfolio_returns(
 
     returns = _add_cash_columns(returns, portfolio)
 
-    weights = pd.Series(
-        {h.metadata.ticker: h.weight for h in portfolio.holdings},
-        dtype=float,
-    )
-    weights = weights.groupby(level=0).sum()  # collapse duplicate tickers
-    weights = weights / weights.sum()  # renormalise after dedup
+    weights_by_ticker: dict[str, float] = {}
+    for h in portfolio.holdings:
+        weights_by_ticker[h.metadata.ticker] = (
+            weights_by_ticker.get(h.metadata.ticker, 0.0) + h.weight
+        )
+    weights = pd.Series(weights_by_ticker, dtype=float)
+    if weights.sum() == 0:
+        raise InsufficientHistoryError(
+            portfolio.name,
+            list(weights.index),
+            window=(date(1970, 1, 1), date(1970, 1, 1)),
+        )
+    weights = weights / weights.sum()
 
     missing = [t for t in weights.index if t not in returns.columns]
     if missing:
@@ -121,35 +136,106 @@ def portfolio_returns(
                 truncated_tickers,
                 window=(_as_date(full_idx.min()), _as_date(full_idx.max())),
             )
-        warnings.warn(msg, stacklevel=2)
+        logger.trace(msg)
         sub = available
 
     weighted = sub.values @ weights.values
-    return pd.Series(weighted, index=sub.index, name=portfolio.name, dtype=np.float64)
+    series = pd.Series(weighted, index=sub.index, name=portfolio.name, dtype=np.float64)
+    fee_annual = float(portfolio.metadata.get("management_fee_annual", 0.0))
+    if fee_annual > 0:
+        series = series - (fee_annual / _TRADING_DAYS_PER_YEAR)
+    if fx_series_usd_sgd is not None and portfolio.currency.upper() == "USD":
+        series = _apply_fx_adjustment(series, fx_series_usd_sgd)
+    return series
 
 
-def _add_cash_columns(returns: pd.DataFrame, portfolio: Portfolio) -> pd.DataFrame:
-    """Synthesise zero-return series for any ``CASH_*`` holdings in *portfolio*.
+def _apply_fx_adjustment(returns: pd.Series, fx_series: pd.Series) -> pd.Series:
+    """Compound a USD-denominated return series with daily USDSGD FX changes."""
+    fx_aligned = fx_series.reindex(returns.index).ffill().bfill()
+    fx_chg = fx_aligned.pct_change().fillna(0.0)
+    adjusted = (1.0 + returns) * (1.0 + fx_chg) - 1.0
+    return pd.Series(adjusted.values, index=returns.index, name=returns.name, dtype=np.float64)
 
-    Cash positions don't have Yahoo tickers; we treat them as 0% daily return.
-    The series is aligned to the existing returns DataFrame's index.
+
+def last_business_day_on_or_before(d: date | datetime | None = None) -> date:
+    """Return *d* if it is a business day; otherwise the most recent prior business day.
+
+    Use as the default end date for diagnostic windows so we don't request data for
+    weekends/today-before-close and dump truncation noise into the logs. Skips
+    weekends only — public-holiday awareness is left to the data provider.
     """
-    cash_tickers = sorted({
-        h.metadata.ticker for h in portfolio.holdings
-        if h.metadata.ticker.startswith("CASH_")
-    })
-    if not cash_tickers:
+    from datetime import timedelta
+
+    target = d if d is not None else date.today()
+    if isinstance(target, datetime):
+        target = target.date()
+    while target.weekday() >= 5:
+        target -= timedelta(days=1)
+    return target
+
+
+_CASH_ANNUAL_YIELDS: dict[str, float] = {
+    # Stashaway Simple SGD / Guitsa: 1.5% p.a. net of fees per stashaway.sg/simple-var3
+    "CASH_SGD": 0.015,
+    # Stashaway Simple USD: approximated as short-rate USD (BIL ≈ SOFR ≈ 5% in 2026).
+    "CASH_USD": 0.05,
+}
+_CASH_ANNUAL_VOLS: dict[str, float] = {
+    # 30% LionGlobal SGD MMF + 70% LionGlobal SGD Enhanced Liquidity has some duration risk
+    "CASH_SGD": 0.0035,
+    # US 1-3M T-Bills track the front of the SOFR curve — very stable
+    "CASH_USD": 0.0015,
+}
+_TRADING_DAYS_PER_YEAR = 252
+
+
+def synthesise_cash_returns(
+    returns: pd.DataFrame, cash_tickers: Iterable[str]
+) -> pd.DataFrame:
+    """Add synthetic daily return columns for the given ``CASH_*`` tickers.
+
+    Drawn from ``Normal(daily_yield, daily_vol)`` where the annual yield matches the
+    product's published net rate (Stashaway Simple SGD/Guitsa ≈ 1.5%, Simple USD
+    proxied at the US short rate ≈ 5%) and the annual vol matches the realistic
+    NAV-wobble of money-market / enhanced-liquidity sleeves (≈ 35 bps for SGD,
+    ≈ 15 bps for USD). Non-zero vol so correlation against other return series is
+    defined — it will still be near zero versus risk assets, which is correct for
+    cash. Seeded per ticker for reproducibility.
+
+    Tickers not starting with ``CASH_`` are silently ignored. Tickers already
+    present as columns in *returns* are left as-is.
+    """
+    needed = sorted(
+        t for t in set(cash_tickers)
+        if t.startswith("CASH_") and t not in returns.columns
+    )
+    if not needed:
         return returns
     if returns.empty:
-        # No price data fetched yet — synthesise a minimal index so weights can resolve.
-        # In practice this only happens for cash-only portfolios that get filtered
-        # upstream, but be defensive anyway.
         idx = pd.bdate_range(date(2015, 1, 1), date.today(), name="date")
         returns = pd.DataFrame(index=idx)
     out = returns.copy()
-    for t in cash_tickers:
-        out[t] = 0.0
+    n = len(out.index)
+    for t in needed:
+        annual_yield = _CASH_ANNUAL_YIELDS.get(t, 0.0)
+        annual_vol = _CASH_ANNUAL_VOLS.get(t, 0.0)
+        daily_mean = (1.0 + annual_yield) ** (1.0 / _TRADING_DAYS_PER_YEAR) - 1.0
+        daily_vol = annual_vol / np.sqrt(_TRADING_DAYS_PER_YEAR)
+        if daily_vol == 0.0:
+            out[t] = daily_mean
+        else:
+            rng = np.random.default_rng(seed=abs(hash(t)) % (2**32))
+            out[t] = rng.normal(daily_mean, daily_vol, size=n)
     return out
+
+
+def _add_cash_columns(returns: pd.DataFrame, portfolio: Portfolio) -> pd.DataFrame:
+    """Per-portfolio wrapper around :func:`synthesise_cash_returns`."""
+    cash_tickers = {
+        h.metadata.ticker for h in portfolio.holdings
+        if h.metadata.ticker.startswith("CASH_")
+    }
+    return synthesise_cash_returns(returns, cash_tickers)
 
 
 def _as_date(ts: pd.Timestamp | Any) -> date:

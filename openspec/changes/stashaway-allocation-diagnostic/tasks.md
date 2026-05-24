@@ -78,10 +78,36 @@
 - [ ] 10.9 Decide on currency-mixing handling: combined-book exposure currently sums USD- and SGD-reported portfolios without FX conversion. Pull `USDSGD=X` daily series and convert if dollar-precise totals matter.
 - [ ] 10.10 Sanity-check the Singapore Investing Sharpe of 2.86 (only 439 days; recently-launched SGX tickers cap the window) — re-run with a longer horizon once more SGX history accumulates, or accept as-is.
 
+## 10b. User review of overnight-run outputs (must precede archive)
+
+- [x] 10b.1 Open `reports/allocation_diagnostic.html` in browser; eyeball all 5 sections (combined exposure, correlation matrix, redundancy pairs, risk contribution, Sharpe rankings) — note anything that looks wrong *(user-flagged: PROTECTED-only cash trio leaking into correlation/benchmark; exposure chart unreadable; missing whole-book performance summary)*
+- [ ] 10b.2 Run `notebooks/allocation/01_validate_holdings.ipynb`; confirm parsed portfolio names, totals, and holding counts match the real 2026-04 statement
+- [ ] 10b.3 Run `notebooks/allocation/02_validate_returns.ipynb`; sanity-check reconstructed return series for each portfolio (no obvious gaps, spikes, or wrong sign)
+- [ ] 10b.4 Run `notebooks/allocation/03_allocation_diagnostic.ipynb`; confirm interactive version matches the static HTML and the redundancy/Sharpe tables are believable
+- [ ] 10b.5 Resolve 10.7–10.10 decisions with informed view from the review above
+
+## 10c. Review-phase fixes (in scope for this change)
+
+- [x] 10c.1 Filter `correlation_matrix` and `benchmark_comparison` to `Role.HOLDING` so PROTECTED-only cash pools (Simple USD/SGD, Guitsa) no longer appear with NaN rows — bug; matches the intent stated in `book_config.py`. Spec updated (`specs/allocation-diagnostic/spec.md`).
+- [x] 10c.2 Add regression tests: a `{PROTECTED}`-only portfolio never appears in the correlation matrix or the benchmark comparison index (`tests/allocation/test_diagnostic.py`).
+- [x] 10c.3 Add `book_performance` + `equity_curve_figure` to `diagnostic.py`: whole-book AUM, annualised return, annualised vol, Sharpe, max DD, and a NAV series indexed to 100. Weights ∝ `total_value` with per-timestep renormalisation so a recently-launched holding in one portfolio doesn't truncate the whole book's history. Spec added (`Combined-book performance summary`).
+- [x] 10c.4 Render the performance summary as the first section of the HTML report; equity-curve plot above the exposure chart.
+- [x] 10c.5 Replace the grouped-bar exposure chart with a 1×3 donut subplot (asset class / region / sector) with grouped legends below — slice text = percent, legend = bucket name, hover = label + dollar value + percent.
+- [x] 10c.6 Re-run `notebooks/allocation/03_allocation_diagnostic.ipynb` and confirm `reports/allocation_diagnostic.html` no longer mentions Simple USD / Simple SGD / Guitsa and includes the new summary section.
+
+## 10d. Future-work backlog (out of scope for this change — capture for later)
+
+- [x] 10d.1 **Cash portfolio returns** — done 2026-05-16: Simple USD / Simple SGD / Guitsa promoted to `HOLDING`, synthetic yields (5% USD / 1.5% SGD) with low-vol noise injected so correlation is defined. Real-data upgrade tracked in 10d.2.
+- [ ] 10d.2 **LionGlobal NAV proxies** — replace synthetic CASH_SGD with constructed return from 30% LionGlobal SGD MMF + 70% LionGlobal SGD Enhanced Liquidity. Either (a) use `MBH.SG` (Nikko AM SGD IG Corporate Bond ETF) as proxy for the 70% sleeve while keeping 30% MMF synthetic, or (b) scrape NAVs from LionGlobal fund factsheets. Same exercise for CASH_USD: try `BIL` or `SGOV` as the BB3M proxy. Phase 1B/2 change.
+- [ ] 10d.3 **Risk contribution FX-adjustment** — `risk_contribution` is currently computed per-ticker on native-currency returns. To make absolute SGD-scaled risk numbers correct, add a `currency` field to `AssetMetadata` and FX-adjust at the ticker level using the same daily USDSGD series. Relative rankings are unchanged; only the absolute numbers shift.
+- [ ] 10d.4 **Cash alternatives comparison** — feed Simple Plus (2.8% YTM, no lock, ~ -0.14% avg monthly DD) and Simple Fixed (1.05% fixed, 1-month tenor) as candidate replacements for Simple. Surface yield delta × current Simple AUM as projected annual $ uplift. Phase 2 (`stashaway-scenario-compare`).
+- [ ] 10d.5 **Deposit-anchored P&L view in reconciliation** — Stashaway's app shows P&L since deposit (today_value − sum_of_deposits). Our reconciliation shows P&L since statement-date closing balance, which differs for brand-new sleeves like BlackRock (~S$120 anchor difference seen 2026-05). Capture deposit amounts (parse Cashflow column from PORTFOLIO SUMMARY?) and add an alternative Δ column anchored on cumulative deposits.
+- [ ] 10d.6 **Periodic vs-app drift-tracking harness** — small utility to record `(date, portfolio, model_today_value, app_today_value)` tuples over time. Surfaces model drift trends, flags when Stashaway changes a product (e.g. swaps an underlying ETF) or when we missed a corporate action. Could be as simple as a CSV append + a chart in notebook 04, or a per-statement reconciliation report.
+
 ## 11. Documentation
 
-- [ ] 11.1 Update `CLAUDE.md` with a short paragraph on the `allocation/` module, its phases, and what's deferred
-- [ ] 11.2 Add `[allocation]` extra to the install snippet in `CLAUDE.md`
+- [x] 11.1 Update `CLAUDE.md` with a short paragraph on the `allocation/` module, its phases, and what's deferred
+- [x] 11.2 Add `[allocation]` extra to the install snippet in `CLAUDE.md`
 
 ## 12. Acceptance
 

@@ -65,7 +65,9 @@ STASHAWAY_UNIVERSE: dict[str, AssetMetadata] = {
     # ----------------------------------------------------------------- US-listed bonds & cash-equivalent
     "BB3M": _m("BB3M", "Bond", "US", "Treasury 0-3M"),
     # ----------------------------------------------------------------- US-listed thematic / income
-    "JEPQ": _m("JEPQ", "Equity", "US", "Nasdaq Covered Call"),
+    # Stashaway uses the UCITS variant for SG investors (15% withholding via
+    # Ireland-US treaty vs 30% on the US-listed JEPQ). User confirmed 2026-05.
+    "JEPQ": _m("JEPQ.L", "Equity", "US", "Nasdaq Covered Call (proxy: JEPQ.L UCITS)"),
     # ----------------------------------------------------------------- US-listed alts
     "GLDM": _m("GLDM", "Commodity", "Global", "Gold"),
     # Spot crypto prices (BTC-USD / ETH-USD) used as proxies — far longer history

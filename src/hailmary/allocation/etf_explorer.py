@@ -117,6 +117,9 @@ def parse_etf_universe(xlsx_path: Path | str) -> pd.DataFrame:
         # Row labelled "AHYG SP" (Asia HY USD) — real SGX symbol is QL3 (SGD
         # share class) per Yahoo longName lookup. AHYG.SI has no Yahoo data.
         "AHYG SP": "QL3.SI",
+        # Row labelled "IBOXIG" (no exchange suffix) — Stashaway-internal code
+        # for iShares iBoxx $ IG Corporate Bond ETF, real ticker LQD on NYSE.
+        "IBOXIG": "LQD",
     }
     df["yahoo_ticker"] = df.apply(
         lambda r: _XLSX_OVERRIDES.get(str(r["bbg_ticker"]).strip(), r["yahoo_ticker"]), axis=1

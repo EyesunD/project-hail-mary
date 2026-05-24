@@ -134,6 +134,10 @@ def parse_etf_universe(xlsx_path: Path | str) -> pd.DataFrame:
         # Row labelled "AHYG SP" (Asia HY USD) — real SGX symbol is QL3 (SGD
         # share class) per Yahoo longName lookup. AHYG.SI has no Yahoo data.
         "AHYG SP": "QL3.SI",
+        # Row labelled "Singapore Equities — Amova Singapore STI ETF — QL3 SP"
+        # — the ticker is wrong in Stashaway's xlsx; QL3 is Asia HY, the real
+        # Amova STI symbol is G3B. User flagged; awaiting updated xlsx.
+        "QL3 SP": "G3B.SI",
         # Row labelled "IBOXIG" (no exchange suffix) — Stashaway-internal code
         # for iShares iBoxx $ IG Corporate Bond ETF, real ticker LQD on NYSE.
         "IBOXIG": "LQD",

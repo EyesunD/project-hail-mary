@@ -480,10 +480,79 @@ NB03 = [
 ]
 
 
+NB_ETF_EXPLORER = [
+    md(
+        "# ETF Explorer (v1)\n"
+        "\n"
+        "Discovery view over Stashaway's full ETF Explorer offering (~98 ETFs).\n"
+        "Computes multi-window metrics (1Y/3Y/5Y) + correlation with your combined book.\n"
+        "Renders to `reports/etf_explorer.html`."
+    ),
+    code(
+        "from datetime import date\n"
+        "from pathlib import Path\n"
+        "\n"
+        "from hailmary.allocation.book_config import MGMT_FEES_ANNUAL, ROLES\n"
+        "from hailmary.allocation.etf_explorer import build_etf_explorer, render_etf_explorer_report\n"
+        "from hailmary.allocation.portfolios import from_parsed\n"
+        "from hailmary.allocation.statements import parse_statement\n"
+        "from hailmary.allocation.returns import last_business_day_on_or_before\n"
+        "from hailmary.data.providers import YahooFinanceProvider\n"
+        "\n"
+        "ETF_XLSX = Path('../../data/stashaway_etf_universe.xlsx')\n"
+        "STATEMENT_PATH = Path('../../data/statements/2026-04 StashAway Monthly Statement.pdf')\n"
+        "REPORT_PATH = Path('../../reports/etf_explorer.html')\n"
+        "START = date(2020, 1, 1)\n"
+        "END = last_business_day_on_or_before(date.today())\n"
+        "TARGET_ANN_RETURN = 0.05\n"
+        "print(f'window: {START}..{END}')"
+    ),
+    md("## Load user's book (for correlation reference)"),
+    code(
+        "parsed = parse_statement(STATEMENT_PATH)\n"
+        "portfolios = [\n"
+        "    from_parsed(\n"
+        "        p,\n"
+        "        roles=ROLES[p.name],\n"
+        "        metadata={'management_fee_annual': MGMT_FEES_ANNUAL.get(p.name, 0.0)},\n"
+        "    )\n"
+        "    for p in parsed if p.name in ROLES\n"
+        "]\n"
+        "provider = YahooFinanceProvider()\n"
+        "fx_bars = provider.get_bars(['USDSGD=X'], START, END)\n"
+        "fx_series_usd_sgd = fx_bars.xs('USDSGD=X', level=0)['close']\n"
+        "print(f'{len(portfolios)} portfolios loaded')"
+    ),
+    md("## Build the explorer DataFrame"),
+    code(
+        "explorer_df = build_etf_explorer(\n"
+        "    ETF_XLSX,\n"
+        "    portfolios=portfolios,\n"
+        "    price_source=provider,\n"
+        "    fx_series_usd_sgd=fx_series_usd_sgd,\n"
+        "    start=START,\n"
+        "    end=END,\n"
+        ")\n"
+        "print(f'{len(explorer_df)} ETFs, {explorer_df[\"has_data\"].sum()} with Yahoo data')\n"
+        "explorer_df.head(20)"
+    ),
+    md("## Render HTML report"),
+    code(
+        "out = render_etf_explorer_report(\n"
+        "    explorer_df,\n"
+        "    REPORT_PATH,\n"
+        "    target_ann_return=TARGET_ANN_RETURN,\n"
+        ")\n"
+        "print(f'Wrote {out.resolve()}')"
+    ),
+]
+
+
 def main() -> None:
     write_notebook(Path("notebooks/allocation/01_validate_holdings.ipynb"), NB01)
     write_notebook(Path("notebooks/allocation/02_validate_returns.ipynb"), NB02)
     write_notebook(Path("notebooks/allocation/03_allocation_diagnostic.ipynb"), NB03)
+    write_notebook(Path("notebooks/allocation/etf_explorer.ipynb"), NB_ETF_EXPLORER)
 
 
 if __name__ == "__main__":

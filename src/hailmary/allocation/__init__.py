@@ -8,6 +8,11 @@ Sub-modules:
     diagnostic  — Combined-book diagnostic engine + HTML report
 """
 
+from hailmary.allocation.etf_explorer import (
+    build_etf_explorer,
+    parse_etf_universe,
+    render_etf_explorer_report,
+)
 from hailmary.allocation.diagnostic import (
     PortfolioDroppedError,
     benchmark_comparison,
@@ -49,13 +54,16 @@ __all__ = [
     "StatementParseError",
     "UnknownAssetError",
     "benchmark_comparison",
+    "build_etf_explorer",
     "book_common_history_start",
     "book_performance",
     "combined_exposure",
     "correlation_matrix",
     "from_parsed",
     "load_holdings_from_json",
+    "parse_etf_universe",
     "parse_statement",
+    "render_etf_explorer_report",
     "portfolio_reconciliation",
     "portfolio_returns",
     "redundancy_pairs",

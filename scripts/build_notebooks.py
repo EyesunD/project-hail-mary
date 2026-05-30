@@ -641,6 +641,30 @@ NB_SCENARIO = [
         "positive year after year, the case is much stronger."
     ),
     md(
+        "## Tail-risk sanity — best & worst rolling N-day stretches\n"
+        "\n"
+        "Calendar years can hide the worst stretch entirely (e.g. a sharp 6-week\n"
+        "drawdown that lives inside a flat full year). `tail_metrics` slides a\n"
+        "rolling window across the whole sample and reports the best and worst\n"
+        "observed cumulative return for each window length — plus the date each\n"
+        "extreme was hit.\n"
+        "\n"
+        "<strong>`delta_worst > 0`</strong> means proposed has a less-bad worst stretch\n"
+        "(better tail protection). <strong>`delta_best > 0`</strong> means proposed\n"
+        "has a better upside stretch. A scenario that improves Δ worst more than it\n"
+        "costs Δ best is winning on asymmetric risk."
+    ),
+    code(
+        "tm = diff_b.deltas.tail_metrics\n"
+        "tm[['cur_best','cur_best_date','cur_worst','cur_worst_date',\n"
+        "    'prop_best','prop_best_date','prop_worst','prop_worst_date',\n"
+        "    'delta_best','delta_worst']].style.format({\n"
+        "    'cur_best': '{:+.2%}', 'cur_worst': '{:+.2%}',\n"
+        "    'prop_best': '{:+.2%}', 'prop_worst': '{:+.2%}',\n"
+        "    'delta_best': '{:+.2%}', 'delta_worst': '{:+.2%}',\n"
+        "}, na_rep='-')"
+    ),
+    md(
         "## Compare all four scenarios side-by-side"
     ),
     code(

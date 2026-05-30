@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from hailmary.allocation.portfolios import (
@@ -93,6 +94,14 @@ class ScenarioDeltas:
     # might hide a +0.6 in one year and -0.4 in another. Columns include
     # cur_/prop_/delta_ variants of sharpe, ann_return, ann_vol, max_dd.
     by_period_deltas: pd.DataFrame = field(default_factory=lambda: pd.DataFrame())
+
+    # Rolling-window tail metrics — for each window length (30/63/126/252
+    # trading days), the best and worst observed cumulative return across
+    # every rolling window of that length, and the date each was hit.
+    # Captures tail behaviour that calendar-year rows miss (e.g. a -15% Q1
+    # 2020 stretch hidden inside a flat full year). Columns include
+    # cur_/prop_ best & worst with dates, and delta_best / delta_worst.
+    tail_metrics: pd.DataFrame = field(default_factory=lambda: pd.DataFrame())
 
 
 @dataclass
@@ -375,6 +384,65 @@ def _exposure_delta(
     return out
 
 
+_TAIL_WINDOWS_DAYS: dict[str, int] = {"1M": 21, "3M": 63, "6M": 126, "1Y": 252}
+
+
+def _tail_metrics(
+    cur_nav: pd.Series | None, prop_nav: pd.Series | None
+) -> pd.DataFrame:
+    """Rolling N-day best / worst cumulative-return for current vs proposed.
+
+    For each window in :data:`_TAIL_WINDOWS_DAYS`, computes the rolling N-day
+    cumulative return on both NAV series, then records the max (best) and
+    min (worst) along with their end-dates. Returns a DataFrame indexed by
+    window label with columns ``cur_best, cur_best_date, cur_worst,
+    cur_worst_date, prop_best, prop_best_date, prop_worst, prop_worst_date,
+    delta_best, delta_worst``.
+
+    Delta interpretation: ``delta_worst > 0`` = proposed had a less-bad
+    worst stretch (tail risk improved); ``delta_best > 0`` = proposed had
+    a better best stretch (upside captured).
+    """
+    if cur_nav is None or prop_nav is None or cur_nav.empty or prop_nav.empty:
+        return pd.DataFrame()
+    cur_r = cur_nav.pct_change().dropna()
+    prop_r = prop_nav.pct_change().dropna()
+    if cur_r.empty or prop_r.empty:
+        return pd.DataFrame()
+
+    def _rolling_extremes(returns: pd.Series, n: int) -> tuple[float, Any, float, Any]:
+        if len(returns) < n:
+            return float("nan"), pd.NaT, float("nan"), pd.NaT
+        log_r = np.log1p(returns)
+        rolling = log_r.rolling(n).sum()
+        cum = (np.exp(rolling) - 1.0).dropna()
+        if cum.empty:
+            return float("nan"), pd.NaT, float("nan"), pd.NaT
+        best_d, worst_d = cum.idxmax(), cum.idxmin()
+        return float(cum.max()), best_d, float(cum.min()), worst_d
+
+    rows: list[dict[str, Any]] = []
+    for label, n in _TAIL_WINDOWS_DAYS.items():
+        cur_best, cur_best_d, cur_worst, cur_worst_d = _rolling_extremes(cur_r, n)
+        prop_best, prop_best_d, prop_worst, prop_worst_d = _rolling_extremes(prop_r, n)
+        rows.append(
+            {
+                "window": label,
+                "cur_best": cur_best,
+                "cur_best_date": cur_best_d.date() if pd.notna(cur_best_d) else pd.NaT,
+                "cur_worst": cur_worst,
+                "cur_worst_date": cur_worst_d.date() if pd.notna(cur_worst_d) else pd.NaT,
+                "prop_best": prop_best,
+                "prop_best_date": prop_best_d.date() if pd.notna(prop_best_d) else pd.NaT,
+                "prop_worst": prop_worst,
+                "prop_worst_date": prop_worst_d.date() if pd.notna(prop_worst_d) else pd.NaT,
+                "delta_best": prop_best - cur_best,
+                "delta_worst": prop_worst - cur_worst,
+            }
+        )
+    return pd.DataFrame(rows).set_index("window")
+
+
 def _by_period_delta(
     cur_windowed: pd.DataFrame | None, prop_windowed: pd.DataFrame | None
 ) -> pd.DataFrame:
@@ -577,6 +645,9 @@ def scenario_compare(
     )
     deltas.by_period_deltas = _by_period_delta(
         cur_book_perf.get("windowed"), prop_book_perf.get("windowed")
+    )
+    deltas.tail_metrics = _tail_metrics(
+        cur_book_perf.get("nav"), prop_book_perf.get("nav")
     )
 
     return ScenarioDiff(

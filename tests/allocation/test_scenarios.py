@@ -362,6 +362,43 @@ def test_scenario_compare_self_returns_zero_deltas(
     assert not bp.empty
     for col in ("delta_sharpe", "delta_ann_return", "delta_ann_vol", "delta_max_dd"):
         assert bp[col].abs().max() == pytest.approx(0.0, abs=1e-9)
+    # Tail metrics likewise zero on self-compare
+    tm = diff.deltas.tail_metrics
+    assert not tm.empty
+    for col in ("delta_best", "delta_worst"):
+        assert tm[col].abs().max() == pytest.approx(0.0, abs=1e-9)
+
+
+def test_scenario_compare_tail_metrics_populated(
+    seeded_universe: object, synthetic_returns: pd.DataFrame
+) -> None:
+    """tail_metrics should have a row per standard window with date columns."""
+    book = _book_with_benchmark(seeded_universe)
+    proposed = drop_portfolio(book, "Crypto")
+    diff = scenario_compare(
+        Scenario("cur", tuple(book)),
+        Scenario("prop", proposed),
+        returns=synthetic_returns,
+    )
+    tm = diff.deltas.tail_metrics
+    assert {"1M", "3M", "6M", "1Y"}.issubset(set(tm.index))
+    for col in (
+        "cur_best",
+        "cur_worst",
+        "prop_best",
+        "prop_worst",
+        "delta_best",
+        "delta_worst",
+        "cur_best_date",
+        "cur_worst_date",
+        "prop_best_date",
+        "prop_worst_date",
+    ):
+        assert col in tm.columns
+    # Worst <= Best for every row, both sides
+    for _, row in tm.iterrows():
+        assert row["cur_worst"] <= row["cur_best"]
+        assert row["prop_worst"] <= row["prop_best"]
 
 
 def test_scenario_compare_by_period_has_year_rows(

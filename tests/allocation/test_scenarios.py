@@ -16,6 +16,7 @@ from hailmary.allocation.scenarios import (
     drop_portfolio,
     merge_into,
     rebalance_into,
+    scenario_compare,
     set_weights,
 )
 from hailmary.allocation.universe import STASHAWAY_UNIVERSE
@@ -304,3 +305,95 @@ def test_helpers_do_not_mutate_input(seeded_universe: object) -> None:
             == snapshot[p.name]["weights"]
         )
         assert frozenset(p.roles) == snapshot[p.name]["roles"]
+
+
+# ---------------------------------------------------------------------------
+# scenario_compare engine
+# ---------------------------------------------------------------------------
+
+
+def _book_with_benchmark(seeded_universe: object) -> list[Portfolio]:
+    """Build a synthetic book with a HOLDING-tagged 'GI' benchmark so
+    benchmark_comparison has something to anchor on."""
+    return [
+        _portfolio(
+            "GI",
+            {"VTI": 0.5, "BND": 0.5},
+            total_value=200_000,
+            roles={Role.HOLDING, Role.MANAGED_BENCHMARK},
+        ),
+        _portfolio(
+            "Crypto",
+            {"VTI": 0.3, "GLD": 0.7},
+            total_value=50_000,
+            roles={Role.HOLDING, Role.CUSTOM},
+        ),
+        _portfolio(
+            "Energy",
+            {"BND": 0.4, "GLD": 0.6},
+            total_value=30_000,
+            roles={Role.HOLDING, Role.CUSTOM},
+        ),
+    ]
+
+
+def test_scenario_compare_self_returns_zero_deltas(
+    seeded_universe: object, synthetic_returns: pd.DataFrame
+) -> None:
+    book = _book_with_benchmark(seeded_universe)
+    s = Scenario(label="current", portfolios=tuple(book))
+    diff = scenario_compare(s, s, returns=synthetic_returns)
+
+    assert diff.deltas.book_sharpe_delta == pytest.approx(0.0, abs=1e-9)
+    assert diff.deltas.book_ann_return_delta == pytest.approx(0.0, abs=1e-9)
+    assert diff.deltas.book_ann_vol_delta == pytest.approx(0.0, abs=1e-9)
+    assert diff.deltas.book_max_dd_delta == pytest.approx(0.0, abs=1e-9)
+    assert diff.deltas.book_aum_delta == pytest.approx(0.0, abs=1e-9)
+    for v in diff.deltas.per_portfolio_sharpe_delta.values():
+        assert v == pytest.approx(0.0, abs=1e-9)
+    assert diff.deltas.redundancy_appeared == []
+    assert diff.deltas.redundancy_disappeared == []
+    # Exposure delta should be zero on every bucket
+    for df in diff.deltas.exposure_delta.values():
+        assert df["weight_delta"].abs().max() == pytest.approx(0.0, abs=1e-9)
+        assert df["value_delta"].abs().max() == pytest.approx(0.0, abs=1e-9)
+
+
+def test_scenario_compare_drop_portfolio_reflects_in_deltas(
+    seeded_universe: object, synthetic_returns: pd.DataFrame
+) -> None:
+    book = _book_with_benchmark(seeded_universe)
+    proposed = drop_portfolio(book, "Crypto")
+
+    cur = Scenario(label="current", portfolios=tuple(book))
+    prop = Scenario(label="drop-Crypto", portfolios=proposed)
+    diff = scenario_compare(cur, prop, returns=synthetic_returns)
+
+    # AUM should shrink by Crypto's value (50_000)
+    assert diff.deltas.book_aum_delta == pytest.approx(-50_000.0, rel=1e-9)
+    # Crypto vanishes from per-portfolio deltas (no longer in proposed)
+    assert "Crypto" not in diff.deltas.per_portfolio_sharpe_delta
+    # GI + Energy remain
+    assert "GI" in diff.deltas.per_portfolio_sharpe_delta
+    assert "Energy" in diff.deltas.per_portfolio_sharpe_delta
+    # Raw outputs are populated (chunk 2 invariant)
+    assert diff.book_performance is not None
+    assert diff.exposure is not None
+    assert diff.benchmarks is not None
+
+
+def test_scenario_compare_exposure_delta_matches_dropped_portfolio(
+    seeded_universe: object, synthetic_returns: pd.DataFrame
+) -> None:
+    book = _book_with_benchmark(seeded_universe)
+    proposed = drop_portfolio(book, "Crypto")
+    cur = Scenario(label="cur", portfolios=tuple(book))
+    prop = Scenario(label="prop", portfolios=proposed)
+    diff = scenario_compare(cur, prop, returns=synthetic_returns)
+
+    ac = diff.deltas.exposure_delta["asset_class"].set_index("bucket")
+    # Crypto contributed 0.3 weight × 50K = 15K of Equity (VTI) and 0.7 × 50K = 35K of Commodity (GLD)
+    # In the combined book pre-drop: Equity from Crypto = 15K, Commodity from Crypto = 35K
+    # Proposed should have less Equity and less Commodity by those amounts
+    assert ac.loc["Equity", "value_delta"] == pytest.approx(-15_000.0, rel=1e-6)
+    assert ac.loc["Commodity", "value_delta"] == pytest.approx(-35_000.0, rel=1e-6)

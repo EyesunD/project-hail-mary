@@ -3,14 +3,15 @@
 User-driven (not optimizer-driven) what-if rebalancing on top of Phase 1
 diagnostics. Helpers (drop_portfolio, set_weights, rebalance_into,
 merge_into) return a new tuple of portfolios — they never mutate the input.
-``scenario_compare`` (chunk 2) runs every Phase 1 diagnostic on both books
-and computes deltas.
+``scenario_compare`` runs every Phase 1 diagnostic on both books and computes
+deltas; ``render_scenario_report`` (chunk 3) renders the result to HTML.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from typing import Any
 
 import pandas as pd
@@ -339,3 +340,215 @@ def merge_into(
     if not inserted:  # defensive — shouldn't happen if names is non-empty
         result.append(merged)
     return tuple(result)
+
+
+# ---------------------------------------------------------------------------
+# scenario_compare engine
+# ---------------------------------------------------------------------------
+
+
+def _exposure_delta(
+    cur: dict[str, pd.DataFrame], prop: dict[str, pd.DataFrame]
+) -> dict[str, pd.DataFrame]:
+    """Per-dimension delta of exposure frames.
+
+    For each dimension (asset_class / region / sector), join current and
+    proposed on bucket, then compute weight_delta and value_delta. Returns
+    one DataFrame per dimension keyed by bucket: columns
+    ``bucket, weight_cur, weight_prop, weight_delta, value_cur, value_prop, value_delta``.
+    """
+    out: dict[str, pd.DataFrame] = {}
+    for dim in set(cur) | set(prop):
+        c = cur.get(dim, pd.DataFrame(columns=["bucket", "value", "weight"])).set_index("bucket")
+        p = prop.get(dim, pd.DataFrame(columns=["bucket", "value", "weight"])).set_index("bucket")
+        merged = c.add_suffix("_cur").join(p.add_suffix("_prop"), how="outer").fillna(0.0)
+        merged["weight_delta"] = merged["weight_prop"] - merged["weight_cur"]
+        merged["value_delta"] = merged["value_prop"] - merged["value_cur"]
+        out[dim] = merged.reset_index().sort_values("weight_delta", key=abs, ascending=False)
+    return out
+
+
+def _redundancy_delta(
+    cur_pairs: list[tuple[str, str, float, str]],
+    prop_pairs: list[tuple[str, str, float, str]],
+) -> tuple[
+    list[tuple[str, str, float]],
+    list[tuple[str, str, float]],
+    list[tuple[str, str, float, float]],
+]:
+    """Split into appeared (only in proposed), disappeared (only in current),
+    persisted (both — current rho, proposed rho)."""
+
+    def _key(p: tuple[str, str, float, str]) -> tuple[str, str]:
+        return tuple(sorted([p[0], p[1]]))  # type: ignore[return-value]
+
+    cur_map = {_key(p): p for p in cur_pairs}
+    prop_map = {_key(p): p for p in prop_pairs}
+    appeared = [
+        (prop_map[k][0], prop_map[k][1], prop_map[k][2])
+        for k in prop_map.keys() - cur_map.keys()
+    ]
+    disappeared = [
+        (cur_map[k][0], cur_map[k][1], cur_map[k][2])
+        for k in cur_map.keys() - prop_map.keys()
+    ]
+    persisted = [
+        (cur_map[k][0], cur_map[k][1], cur_map[k][2], prop_map[k][2])
+        for k in cur_map.keys() & prop_map.keys()
+    ]
+    return appeared, disappeared, persisted
+
+
+def scenario_compare(
+    current: Scenario,
+    proposed: Scenario,
+    *,
+    start: date | datetime | None = None,
+    end: date | datetime | None = None,
+    price_source: Any | None = None,
+    returns: pd.DataFrame | None = None,
+    fx_series_usd_sgd: pd.Series | None = None,
+    fx_rate_usd_sgd: float | None = None,
+    redundancy_threshold: float = 0.85,
+    risk_free_rate: float = 0.0,
+    align_window: bool = True,
+    target_ann_return: float = 0.05,
+) -> ScenarioDiff:
+    """Run every Phase 1 diagnostic on both books and compute deltas.
+
+    Returns a :class:`ScenarioDiff` containing the paired raw outputs and a
+    fully-populated :class:`ScenarioDeltas`. Identical kwargs are passed to
+    both runs so the comparison is apples-to-apples.
+
+    Phase 1 diagnostics invoked:
+    ``book_performance`` · ``combined_exposure`` · ``correlation_matrix``
+    · ``redundancy_pairs`` · ``risk_contribution`` · ``benchmark_comparison``
+    """
+    # Imported inside the function to keep scenarios.py free of a top-level
+    # dependency on diagnostic.py (avoids any future circular-import risk).
+    from hailmary.allocation.diagnostic import (
+        benchmark_comparison,
+        book_performance,
+        combined_exposure,
+        correlation_matrix,
+        redundancy_pairs,
+        risk_contribution,
+    )
+
+    cur_books = list(current.portfolios)
+    prop_books = list(proposed.portfolios)
+
+    panel_kwargs: dict[str, Any] = {
+        "start": start,
+        "end": end,
+        "price_source": price_source,
+        "returns": returns,
+        "fx_series_usd_sgd": fx_series_usd_sgd,
+    }
+
+    cur_book_perf = book_performance(
+        cur_books,
+        **panel_kwargs,
+        fx_rate_usd_sgd=fx_rate_usd_sgd,
+        risk_free_rate=risk_free_rate,
+        align_window=align_window,
+    )
+    prop_book_perf = book_performance(
+        prop_books,
+        **panel_kwargs,
+        fx_rate_usd_sgd=fx_rate_usd_sgd,
+        risk_free_rate=risk_free_rate,
+        align_window=align_window,
+    )
+
+    cur_exposure = combined_exposure(cur_books)
+    prop_exposure = combined_exposure(prop_books)
+
+    cur_corr = correlation_matrix(cur_books, **panel_kwargs)
+    prop_corr = correlation_matrix(prop_books, **panel_kwargs)
+
+    cur_pairs = redundancy_pairs(cur_corr, threshold=redundancy_threshold, portfolios=cur_books)
+    prop_pairs = redundancy_pairs(prop_corr, threshold=redundancy_threshold, portfolios=prop_books)
+
+    cur_risk = risk_contribution(
+        cur_books,
+        start=start,
+        end=end,
+        price_source=price_source,
+        returns=returns,
+        fx_rate_usd_sgd=fx_rate_usd_sgd,
+    )
+    prop_risk = risk_contribution(
+        prop_books,
+        start=start,
+        end=end,
+        price_source=price_source,
+        returns=returns,
+        fx_rate_usd_sgd=fx_rate_usd_sgd,
+    )
+
+    cur_bench = benchmark_comparison(
+        cur_books,
+        **panel_kwargs,
+        fx_rate_usd_sgd=fx_rate_usd_sgd,
+        risk_free_rate=risk_free_rate,
+        align_window=align_window,
+        target_ann_return=target_ann_return,
+    )
+    prop_bench = benchmark_comparison(
+        prop_books,
+        **panel_kwargs,
+        fx_rate_usd_sgd=fx_rate_usd_sgd,
+        risk_free_rate=risk_free_rate,
+        align_window=align_window,
+        target_ann_return=target_ann_return,
+    )
+
+    # ----- compute deltas -----
+    deltas = ScenarioDeltas()
+    deltas.book_sharpe_delta = float(prop_book_perf.get("sharpe", 0.0)) - float(
+        cur_book_perf.get("sharpe", 0.0)
+    )
+    deltas.book_ann_return_delta = float(prop_book_perf.get("ann_return", 0.0)) - float(
+        cur_book_perf.get("ann_return", 0.0)
+    )
+    deltas.book_ann_vol_delta = float(prop_book_perf.get("ann_vol", 0.0)) - float(
+        cur_book_perf.get("ann_vol", 0.0)
+    )
+    deltas.book_max_dd_delta = float(prop_book_perf.get("max_dd", 0.0)) - float(
+        cur_book_perf.get("max_dd", 0.0)
+    )
+    deltas.book_aum_delta = float(prop_book_perf.get("aum", 0.0)) - float(
+        cur_book_perf.get("aum", 0.0)
+    )
+
+    # Per-portfolio deltas — only names present in both
+    for name in set(cur_bench.index) & set(prop_bench.index):
+        if name == "Combined book":
+            continue
+        deltas.per_portfolio_sharpe_delta[name] = float(prop_bench.loc[name, "sharpe"]) - float(
+            cur_bench.loc[name, "sharpe"]
+        )
+        deltas.per_portfolio_vol_delta[name] = float(
+            prop_bench.loc[name, "annualised_vol"]
+        ) - float(cur_bench.loc[name, "annualised_vol"])
+        deltas.per_portfolio_max_dd_delta[name] = float(
+            prop_bench.loc[name, "max_dd"]
+        ) - float(cur_bench.loc[name, "max_dd"])
+
+    deltas.exposure_delta = _exposure_delta(cur_exposure, prop_exposure)
+    deltas.redundancy_appeared, deltas.redundancy_disappeared, deltas.redundancy_persisted = (
+        _redundancy_delta(cur_pairs, prop_pairs)
+    )
+
+    return ScenarioDiff(
+        current=current,
+        proposed=proposed,
+        deltas=deltas,
+        book_performance=(cur_book_perf, prop_book_perf),
+        exposure=(cur_exposure, prop_exposure),
+        correlation=(cur_corr, prop_corr),
+        redundancy=(cur_pairs, prop_pairs),
+        risk=(cur_risk, prop_risk),
+        benchmarks=(cur_bench, prop_bench),
+    )

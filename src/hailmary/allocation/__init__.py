@@ -21,6 +21,7 @@ from hailmary.allocation.scenarios import (
     drop_portfolio,
     merge_into,
     rebalance_into,
+    scenario_compare,
     set_weights,
 )
 from hailmary.allocation.diagnostic import (
@@ -87,5 +88,6 @@ __all__ = [
     "render_html_report",
     "resolve",
     "risk_contribution",
+    "scenario_compare",
     "set_weights",
 ]

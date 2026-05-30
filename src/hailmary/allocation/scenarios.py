@@ -87,6 +87,13 @@ class ScenarioDeltas:
     redundancy_disappeared: list[tuple[str, str, float]] = field(default_factory=list)
     redundancy_persisted: list[tuple[str, str, float, float]] = field(default_factory=list)
 
+    # Per-period scenario deltas — diff book_performance's windowed table
+    # (1M / 3M / 6M / 1Y / All / per-calendar-year rows) between current and
+    # proposed. Surfaces regime variation: an aggregate +0.2 Sharpe delta
+    # might hide a +0.6 in one year and -0.4 in another. Columns include
+    # cur_/prop_/delta_ variants of sharpe, ann_return, ann_vol, max_dd.
+    by_period_deltas: pd.DataFrame = field(default_factory=lambda: pd.DataFrame())
+
 
 @dataclass
 class ScenarioDiff:
@@ -368,6 +375,34 @@ def _exposure_delta(
     return out
 
 
+def _by_period_delta(
+    cur_windowed: pd.DataFrame | None, prop_windowed: pd.DataFrame | None
+) -> pd.DataFrame:
+    """Per-period diff of the windowed-metrics tables.
+
+    Each row = one period (1M / 3M / 6M / 1Y / All / a calendar year),
+    columns = ``period``, ``cur_<metric>``, ``prop_<metric>``, ``delta_<metric>``
+    for each of sharpe / ann_return / ann_vol / max_dd. Periods present in
+    only one side get NaNs on the missing side.
+    """
+    if cur_windowed is None or prop_windowed is None:
+        return pd.DataFrame()
+    if cur_windowed.empty and prop_windowed.empty:
+        return pd.DataFrame()
+    metrics = ["sharpe", "ann_return", "ann_vol", "max_dd"]
+    c = cur_windowed.set_index("period")[metrics].add_prefix("cur_")
+    p = prop_windowed.set_index("period")[metrics].add_prefix("prop_")
+    merged = c.join(p, how="outer")
+    for m in metrics:
+        merged[f"delta_{m}"] = merged.get(f"prop_{m}") - merged.get(f"cur_{m}")
+    # Preserve the canonical period order (1M, 3M, 6M, 1Y, All, then years).
+    canonical = list(cur_windowed["period"]) + [
+        p for p in prop_windowed["period"] if p not in list(cur_windowed["period"])
+    ]
+    merged = merged.reindex([p for p in canonical if p in merged.index])
+    return merged.reset_index()
+
+
 def _redundancy_delta(
     cur_pairs: list[tuple[str, str, float, str]],
     prop_pairs: list[tuple[str, str, float, str]],
@@ -539,6 +574,9 @@ def scenario_compare(
     deltas.exposure_delta = _exposure_delta(cur_exposure, prop_exposure)
     deltas.redundancy_appeared, deltas.redundancy_disappeared, deltas.redundancy_persisted = (
         _redundancy_delta(cur_pairs, prop_pairs)
+    )
+    deltas.by_period_deltas = _by_period_delta(
+        cur_book_perf.get("windowed"), prop_book_perf.get("windowed")
     )
 
     return ScenarioDiff(

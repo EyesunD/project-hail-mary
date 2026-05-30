@@ -617,6 +617,30 @@ NB_SCENARIO = [
         "headline(diff_d)"
     ),
     md(
+        "## Regime sanity — how does scenario B look year-by-year?\n"
+        "\n"
+        "Aggregate Sharpe Δ averages over all regimes. A +0.2 headline can hide a\n"
+        "+0.6 great year and a -0.4 bad year. `by_period_deltas` slices the impact\n"
+        "by period (standard windows + each calendar year)."
+    ),
+    code(
+        "bp = diff_b.deltas.by_period_deltas.set_index('period')\n"
+        "show = bp[['cur_sharpe', 'prop_sharpe', 'delta_sharpe',\n"
+        "           'cur_ann_return', 'prop_ann_return', 'delta_ann_return',\n"
+        "           'delta_max_dd']]\n"
+        "show.style.format({\n"
+        "    'cur_sharpe':'{:.2f}', 'prop_sharpe':'{:.2f}', 'delta_sharpe':'{:+.3f}',\n"
+        "    'cur_ann_return':'{:+.2%}', 'prop_ann_return':'{:+.2%}',\n"
+        "    'delta_ann_return':'{:+.2%}', 'delta_max_dd':'{:+.2%}',\n"
+        "}, na_rep='-')"
+    ),
+    md(
+        "Read the calendar-year rows: if `delta_sharpe` flips sign across years, the\n"
+        "aggregate is masking real regime variance — that's a signal to be careful\n"
+        "before acting on the headline alone. If `delta_sharpe` is consistently\n"
+        "positive year after year, the case is much stronger."
+    ),
+    md(
         "## Compare all four scenarios side-by-side"
     ),
     code(

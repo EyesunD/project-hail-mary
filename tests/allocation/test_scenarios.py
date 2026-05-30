@@ -357,6 +357,30 @@ def test_scenario_compare_self_returns_zero_deltas(
     for df in diff.deltas.exposure_delta.values():
         assert df["weight_delta"].abs().max() == pytest.approx(0.0, abs=1e-9)
         assert df["value_delta"].abs().max() == pytest.approx(0.0, abs=1e-9)
+    # Per-period deltas should also be zero across every period × metric
+    bp = diff.deltas.by_period_deltas
+    assert not bp.empty
+    for col in ("delta_sharpe", "delta_ann_return", "delta_ann_vol", "delta_max_dd"):
+        assert bp[col].abs().max() == pytest.approx(0.0, abs=1e-9)
+
+
+def test_scenario_compare_by_period_has_year_rows(
+    seeded_universe: object, synthetic_returns: pd.DataFrame
+) -> None:
+    """by_period_deltas should include standard windows + calendar-year rows."""
+    book = _book_with_benchmark(seeded_universe)
+    proposed = drop_portfolio(book, "Crypto")
+    diff = scenario_compare(
+        Scenario("cur", tuple(book)),
+        Scenario("prop", proposed),
+        returns=synthetic_returns,
+    )
+    periods = set(diff.deltas.by_period_deltas["period"])
+    # standard windows are always there
+    assert {"1M", "3M", "1Y", "All"}.issubset(periods)
+    # at least one calendar-year row from the synthetic 2021-2023 fixture
+    year_rows = [p for p in periods if any(c.isdigit() for c in str(p))]
+    assert year_rows, f"expected calendar-year rows, got: {sorted(periods)}"
 
 
 def test_scenario_compare_drop_portfolio_reflects_in_deltas(

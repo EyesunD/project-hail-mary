@@ -480,6 +480,181 @@ NB03 = [
 ]
 
 
+NB_SCENARIO = [
+    md(
+        "# 04 — Scenario compare (Phase 2)\n"
+        "\n"
+        "What-if rebalancing on top of the Phase 1 diagnostic. Express a proposed\n"
+        "book via the edit helpers (`drop_portfolio`, `rebalance_into`, `merge_into`,\n"
+        "`set_weights`) and diff it against the current book — every Phase 1 metric\n"
+        "is recomputed on both sides and surfaced as deltas."
+    ),
+    md("## Setup — load real book + market data"),
+    code(
+        "from datetime import date\n"
+        "from pathlib import Path\n"
+        "\n"
+        "import pandas as pd\n"
+        "\n"
+        "from hailmary.allocation.book_config import MGMT_FEES_ANNUAL, ROLES\n"
+        "from hailmary.allocation.portfolios import Role, from_parsed\n"
+        "from hailmary.allocation.statements import parse_statement\n"
+        "from hailmary.allocation.returns import last_business_day_on_or_before\n"
+        "from hailmary.allocation.scenarios import (\n"
+        "    Scenario, drop_portfolio, merge_into, rebalance_into, scenario_compare, set_weights,\n"
+        ")\n"
+        "from hailmary.data.providers import YahooFinanceProvider\n"
+        "\n"
+        "STATEMENT_PATH = Path('../../data/statements/2026-04 StashAway Monthly Statement.pdf')\n"
+        "START = date(2022, 1, 1)\n"
+        "END = last_business_day_on_or_before(date.today())\n"
+        "\n"
+        "parsed = parse_statement(STATEMENT_PATH)\n"
+        "portfolios = [\n"
+        "    from_parsed(\n"
+        "        p,\n"
+        "        roles=ROLES[p.name],\n"
+        "        metadata={'management_fee_annual': MGMT_FEES_ANNUAL.get(p.name, 0.0)},\n"
+        "    )\n"
+        "    for p in parsed if p.name in ROLES\n"
+        "]\n"
+        "holding = [p for p in portfolios if Role.HOLDING in p.roles]\n"
+        "tickers = sorted({\n"
+        "    h.metadata.ticker for p in holding for h in p.holdings\n"
+        "    if not h.metadata.ticker.startswith('CASH_')\n"
+        "})\n"
+        "provider = YahooFinanceProvider()\n"
+        "returns = provider.get_returns(tickers, START, END)\n"
+        "fx_bars = provider.get_bars(['USDSGD=X'], START, END)\n"
+        "fx_series_usd_sgd = fx_bars.xs('USDSGD=X', level=0)['close']\n"
+        "print(f'{len(portfolios)} portfolios loaded, {len(holding)} HOLDING-tagged, '\n"
+        "      f'window {START}..{END}')"
+    ),
+    code(
+        "def headline(diff):\n"
+        "    d = diff.deltas\n"
+        "    print(f'Combined book changes ({diff.current.label}  ->  {diff.proposed.label}):')\n"
+        "    print(f'  Sharpe Δ:    {d.book_sharpe_delta:+.3f}')\n"
+        "    print(f'  Ann ret Δ:   {d.book_ann_return_delta:+.2%}')\n"
+        "    print(f'  Vol Δ:       {d.book_ann_vol_delta:+.2%}')\n"
+        "    print(f'  Max DD Δ:    {d.book_max_dd_delta:+.2%}')\n"
+        "    print(f'  AUM Δ:       {d.book_aum_delta:+,.0f} SGD')\n"
+        "    if d.redundancy_appeared:\n"
+        "        print(f'  Redundancy appeared:    {d.redundancy_appeared}')\n"
+        "    if d.redundancy_disappeared:\n"
+        "        print(f'  Redundancy disappeared: {d.redundancy_disappeared}')\n"
+        "\n"
+        "cur = Scenario('current book', tuple(portfolios))\n"
+        "kw = dict(returns=returns, fx_series_usd_sgd=fx_series_usd_sgd, align_window=True)"
+    ),
+    md(
+        "## Scenario A — What if I dropped Crypto?\n"
+        "\n"
+        "Removes the Crypto sleeve entirely. The freed capital is just *gone* from the\n"
+        "book (use `rebalance_into` if you want to redeploy it). Useful for seeing\n"
+        "how much risk Crypto is contributing."
+    ),
+    code(
+        "proposed = drop_portfolio(portfolios, 'Crypto')\n"
+        "diff_a = scenario_compare(cur, Scenario('drop Crypto', proposed), **kw)\n"
+        "headline(diff_a)"
+    ),
+    code(
+        "print('Asset-class exposure shift:')\n"
+        "diff_a.deltas.exposure_delta['asset_class'].head(10)"
+    ),
+    md(
+        "## Scenario B — What if I moved Crypto into BlackRock?\n"
+        "\n"
+        "`rebalance_into` moves Crypto's whole `total_value` into BlackRock\n"
+        "at BlackRock's current composition. Crypto disappears; BlackRock gets bigger.\n"
+        "Both are USD sleeves — same-currency rotations only (cross-currency rotations\n"
+        "raise `ScenarioEditError`; convert FX first if needed)."
+    ),
+    code(
+        "proposed = rebalance_into(portfolios, 'Crypto', 'BlackRock')\n"
+        "diff_b = scenario_compare(cur, Scenario('Crypto -> BlackRock', proposed), **kw)\n"
+        "headline(diff_b)"
+    ),
+    md(
+        "## Scenario C — What if I merged Energy + Utilities + HDY into one sleeve?\n"
+        "\n"
+        "Value-weighted union of the three customs into a single 'Custom Equity Sleeve'.\n"
+        "Same total exposure — just consolidated administratively."
+    ),
+    code(
+        "proposed = merge_into(\n"
+        "    portfolios,\n"
+        "    names=['Energy', 'Utilities', 'High Dividend Yield'],\n"
+        "    into='Custom Equity Sleeve',\n"
+        ")\n"
+        "diff_c = scenario_compare(cur, Scenario('merge customs', proposed), **kw)\n"
+        "headline(diff_c)"
+    ),
+    md(
+        "## Scenario D — What if I shifted Crypto weights 50/50 BTC/ETH?\n"
+        "\n"
+        "`set_weights` replaces one sleeve's weights. Requires explicit weight for\n"
+        "every existing holding (pass 0.0 to zero one out)."
+    ),
+    code(
+        "crypto = next(p for p in portfolios if p.name == 'Crypto')\n"
+        "print('Current Crypto holdings:')\n"
+        "for h in crypto.holdings:\n"
+        "    print(f'  {h.stashaway_id:<10} weight={h.weight:.3f}')"
+    ),
+    code(
+        "# Build a 50/50 BTC/ETH proposal (zero out any other holdings)\n"
+        "current_weights = {h.stashaway_id: h.weight for h in crypto.holdings}\n"
+        "new_weights = {sid: 0.0 for sid in current_weights}\n"
+        "if 'FBTC' in new_weights: new_weights['FBTC'] = 0.5\n"
+        "if 'FETH' in new_weights: new_weights['FETH'] = 0.5\n"
+        "# Sanity: weights sum to 1\n"
+        "assert abs(sum(new_weights.values()) - 1.0) < 1e-9, new_weights\n"
+        "\n"
+        "proposed = set_weights(portfolios, 'Crypto', new_weights)\n"
+        "diff_d = scenario_compare(cur, Scenario('Crypto 50/50 BTC/ETH', proposed), **kw)\n"
+        "headline(diff_d)"
+    ),
+    md(
+        "## Compare all four scenarios side-by-side"
+    ),
+    code(
+        "import pandas as pd\n"
+        "rows = []\n"
+        "for label, diff in [\n"
+        "    ('A: drop Crypto', diff_a),\n"
+        "    ('B: Crypto -> SI', diff_b),\n"
+        "    ('C: merge customs', diff_c),\n"
+        "    ('D: 50/50 BTC/ETH', diff_d),\n"
+        "]:\n"
+        "    d = diff.deltas\n"
+        "    rows.append({\n"
+        "        'scenario': label,\n"
+        "        'Sharpe Δ': d.book_sharpe_delta,\n"
+        "        'AnnRet Δ': d.book_ann_return_delta,\n"
+        "        'Vol Δ':    d.book_ann_vol_delta,\n"
+        "        'MaxDD Δ':  d.book_max_dd_delta,\n"
+        "        'AUM Δ':    d.book_aum_delta,\n"
+        "        'red. appeared':    len(d.redundancy_appeared),\n"
+        "        'red. disappeared': len(d.redundancy_disappeared),\n"
+        "    })\n"
+        "summary = pd.DataFrame(rows).set_index('scenario')\n"
+        "summary.style.format({\n"
+        "    'Sharpe Δ': '{:+.3f}', 'AnnRet Δ': '{:+.2%}',\n"
+        "    'Vol Δ': '{:+.2%}', 'MaxDD Δ': '{:+.2%}', 'AUM Δ': '{:+,.0f}',\n"
+        "}, na_rep='-')"
+    ),
+    md(
+        "## Want HTML?\n"
+        "\n"
+        "Chunk 3 (`render_scenario_report`) is still TODO. Once built, every `diff`\n"
+        "above can be exported to a self-contained side-by-side HTML with the same\n"
+        "styling as `reports/allocation_diagnostic.html`."
+    ),
+]
+
+
 NB_ETF_EXPLORER = [
     md(
         "# ETF Explorer (v1)\n"
@@ -552,6 +727,7 @@ def main() -> None:
     write_notebook(Path("notebooks/allocation/01_validate_holdings.ipynb"), NB01)
     write_notebook(Path("notebooks/allocation/02_validate_returns.ipynb"), NB02)
     write_notebook(Path("notebooks/allocation/03_allocation_diagnostic.ipynb"), NB03)
+    write_notebook(Path("notebooks/allocation/04_scenario_compare.ipynb"), NB_SCENARIO)
     write_notebook(Path("notebooks/allocation/etf_explorer.ipynb"), NB_ETF_EXPLORER)
 
 

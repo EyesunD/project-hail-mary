@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>{{ title }}</title>
+<style>
+  body { font-family: Inter, system-ui, sans-serif; background: #0d1117; color: #e6edf3;
+         margin: 0; padding: 24px; }
+  h1, h2, h3 { color: #e6edf3; }
+  h2 { border-bottom: 1px solid #30363d; padding-bottom: 6px; margin-top: 32px; }
+  h3 { margin-top: 18px; color: #58a6ff; }
+  .meta { color: #8b949e; font-size: 13px; }
+  .scen-labels { display: flex; gap: 24px; margin: 6px 0 18px; font-size: 14px; }
+  .scen-labels .cur { color: #8b949e; }
+  .scen-labels .prop { color: #58a6ff; font-weight: 600; }
+
+  .delta-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+                 gap: 12px; margin: 16px 0; }
+  .delta-card { background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+                padding: 12px 16px; }
+  .delta-card .label { font-size: 12px; color: #8b949e; }
+  .delta-card .val   { font-size: 22px; font-weight: 600; margin-top: 4px;
+                       font-variant-numeric: tabular-nums; }
+  .delta-card .sub   { font-size: 11px; color: #8b949e; margin-top: 2px; }
+  .pos { color: #3fb950; }
+  .neg { color: #f85149; }
+  .neu { color: #8b949e; }
+
+  .ds-table { border-collapse: collapse; margin-top: 8px; font-size: 12px; }
+  .ds-table th, .ds-table td { border: 1px solid #30363d; padding: 3px 7px; text-align: right; }
+  .ds-table th { background: #161b22; text-align: left; cursor: pointer; user-select: none; }
+  .ds-table th:hover { background: #1f2730; }
+  .ds-table th[data-sort-dir="asc"]::after { content: " ▲"; color: #58a6ff; }
+  .ds-table th[data-sort-dir="desc"]::after { content: " ▼"; color: #58a6ff; }
+  .ds-table td:first-child, .ds-table th:first-child { text-align: left; }
+  .ds-table td { font-variant-numeric: tabular-nums; }
+
+  .footnote { color: #8b949e; font-size: 12px; line-height: 1.45; max-width: 1100px; margin: 10px 0; }
+  .footnote code { background: #161b22; padding: 1px 4px; border-radius: 3px; font-size: 11.5px; }
+  .caveat { background: #161b22; border-left: 3px solid #d29922; padding: 10px 14px;
+            margin: 16px 0; color: #d29922; font-size: 13px; }
+
+  .three-col { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+               gap: 16px; align-items: start; }
+</style>
+</head><body>
+<h1>{{ title }}</h1>
+<p class="meta">Generated {{ generated_at }}</p>
+<div class="scen-labels">
+  <div class="cur">Current: <strong>{{ current_label }}</strong></div>
+  <div>→</div>
+  <div class="prop">Proposed: <strong>{{ proposed_label }}</strong></div>
+</div>
+
+<div class="caveat">
+  All deltas are <strong>proposed − current</strong>. Sign convention: positive Sharpe / return / ΔVol-if-removed = better for proposed; negative max-drawdown delta = worse drawdown in proposed. Reconstruction uses statement-date weights × historical underlying-asset prices, same as Phase 1 — projection of today's hypothetical book onto historical data, not a back-test of a rebalanced path.
+</div>
+
+<h2>Headline deltas</h2>
+{{ delta_strip | safe }}
+
+<h2>Regime variance — by period</h2>
+<p class="footnote">
+  Aggregate Sharpe Δ averages over all periods. The per-calendar-year rows show whether the
+  scenario impact was <em>consistent across regimes</em> or driven by one favourable year.
+  Sign flips across years = the headline is masking real regime variance.
+</p>
+{{ by_period | safe }}
+
+<h2>Tail-risk sanity — best & worst rolling N-day stretches</h2>
+<p class="footnote">
+  Rolling window scan across the full sample. <strong>Δ worst &gt; 0</strong> = proposed has a
+  less-bad worst stretch (better tail protection); <strong>Δ best &gt; 0</strong> = proposed has
+  a better upside stretch. Dates show when each extreme was hit. A scenario that improves
+  Δ worst more than it costs Δ best is winning on asymmetric risk.
+</p>
+{{ tail_metrics | safe }}
+
+<h2>Per-portfolio shifts</h2>
+<p class="footnote">
+  For each portfolio present in both books, the change in Sharpe / vol / max DD between current and proposed.
+  (The headline "Combined book" row is excluded — that's the aggregation, not a comparable sleeve.)
+</p>
+{{ per_portfolio | safe }}
+
+<h2>Exposure shift</h2>
+<p class="footnote">
+  Per dimension, how the bucket weights and dollar values shift. Sorted by absolute weight shift, biggest movers first.
+</p>
+<div class="three-col">
+  {{ exposure_delta | safe }}
+</div>
+
+<h2>Redundancy lifecycle</h2>
+<p class="footnote">
+  Pairs whose correlation crosses the redundancy threshold ({{ redundancy_threshold }}) in current vs proposed.
+  <strong>Appeared</strong> = new redundancy created by the scenario.
+  <strong>Disappeared</strong> = redundancy removed.
+  <strong>Persisted</strong> = pair still flagged in both (with current ρ → proposed ρ).
+</p>
+{{ redundancy_section | safe }}
+
+<script>
+(function () {
+  function parseCell(text) {
+    var t = (text || "").trim();
+    if (t === "" || t === "—" || t.toLowerCase() === "nan") return null;
+    var compact = t.match(/^([-+]?[0-9]+(?:\.[0-9]+)?)\s*([KMB])$/i);
+    if (compact) {
+      var mult = { K: 1e3, M: 1e6, B: 1e9 }[compact[2].toUpperCase()];
+      return parseFloat(compact[1]) * mult;
+    }
+    if (/%$/.test(t)) {
+      var pct = parseFloat(t.replace(/[^0-9.+\-]/g, ""));
+      return isNaN(pct) ? t : pct / 100;
+    }
+    var stripped = t.replace(/[,\s]/g, "");
+    if (/^[-+]?[0-9]+(?:\.[0-9]+)?$/.test(stripped)) return parseFloat(stripped);
+    return t.toLowerCase();
+  }
+  function compare(a, b) {
+    if (a === null && b === null) return 0;
+    if (a === null) return 1;
+    if (b === null) return -1;
+    if (typeof a === "number" && typeof b === "number") return a - b;
+    return String(a).localeCompare(String(b));
+  }
+  function makeSortable(table) {
+    var headerRows = table.querySelectorAll("thead tr");
+    if (!headerRows.length) return;
+    var headers = headerRows[headerRows.length - 1].querySelectorAll("th");
+    var tbody = table.querySelector("tbody");
+    if (!tbody) return;
+    headers.forEach(function (th, idx) {
+      th.addEventListener("click", function () {
+        var current = th.getAttribute("data-sort-dir");
+        var nextDir = current === "asc" ? "desc" : "asc";
+        headers.forEach(function (h) { h.removeAttribute("data-sort-dir"); });
+        th.setAttribute("data-sort-dir", nextDir);
+        var rows = Array.prototype.slice.call(tbody.querySelectorAll("tr"));
+        rows.sort(function (rA, rB) {
+          var vA = parseCell(rA.cells[idx] ? rA.cells[idx].textContent : "");
+          var vB = parseCell(rB.cells[idx] ? rB.cells[idx].textContent : "");
+          var c = compare(vA, vB);
+          return nextDir === "asc" ? c : -c;
+        });
+        rows.forEach(function (r) { tbody.appendChild(r); });
+      });
+    });
+  }
+  document.addEventListener("DOMContentLoaded", function () {
+    document.querySelectorAll("table.ds-table").forEach(makeSortable);
+  });
+})();
+</script>
+</body></html>

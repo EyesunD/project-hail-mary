@@ -694,11 +694,29 @@ NB_SCENARIO = [
         "}, na_rep='-')"
     ),
     md(
-        "## Want HTML?\n"
+        "## Export HTML reports\n"
         "\n"
-        "Chunk 3 (`render_scenario_report`) is still TODO. Once built, every `diff`\n"
-        "above can be exported to a self-contained side-by-side HTML with the same\n"
-        "styling as `reports/allocation_diagnostic.html`."
+        "`render_scenario_report(diff, path)` writes a self-contained HTML with the\n"
+        "headline delta strip, by-period regime table, tail-risk best/worst rolling\n"
+        "stretches, per-portfolio shifts, exposure deltas and the redundancy\n"
+        "lifecycle — same dark theme + sortable tables as the Phase 1 report."
+    ),
+    code(
+        "from pathlib import Path\n"
+        "from hailmary.allocation.scenarios import render_scenario_report\n"
+        "\n"
+        "REPORTS_DIR = Path('../../reports')\n"
+        "REPORTS_DIR.mkdir(parents=True, exist_ok=True)\n"
+        "outputs = {\n"
+        "    'A_drop_crypto': diff_a,\n"
+        "    'B_crypto_to_blackrock': diff_b,\n"
+        "    'C_merge_customs': diff_c,\n"
+        "    'D_crypto_50_50_btc_eth': diff_d,\n"
+        "}\n"
+        "for slug, diff in outputs.items():\n"
+        "    path = REPORTS_DIR / f'scenario_{slug}.html'\n"
+        "    render_scenario_report(diff, path, title=f'Scenario — {slug}')\n"
+        "    print(f'wrote {path.resolve()}')"
     ),
 ]
 

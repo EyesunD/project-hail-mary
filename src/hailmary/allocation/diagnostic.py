@@ -20,9 +20,10 @@ design ``D7`` to keep regime-conditional analysis (Phase 3) cheap.
 
 from __future__ import annotations
 
+import re
 import warnings
 from collections.abc import Iterable, Sequence
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -34,7 +35,7 @@ import plotly.io as pio
 from plotly.subplots import make_subplots
 
 from hailmary.allocation.portfolios import Portfolio, Role
-from hailmary.allocation.returns import portfolio_returns
+from hailmary.allocation.returns import _CASH_ANNUAL_YIELDS, portfolio_returns
 from hailmary.analytics.metrics import PerformanceMetrics
 from hailmary.viz.theme import PALETTE, apply_theme
 
@@ -554,12 +555,156 @@ def equity_curve_figure(nav: pd.Series) -> go.Figure:
 # ---------------------------------------------------------------------------
 
 
+def holdings_reconciliation(
+    portfolio: Portfolio,
+    *,
+    end: date | datetime,
+    price_source: Any | None = None,
+    fx_series_usd_sgd: pd.Series | None = None,
+) -> pd.DataFrame:
+    """Per-holding statement→today reconciliation for one portfolio.
+
+    Returns a DataFrame with columns:
+    ``ticker, label, weight, stmt_value, stmt_price, today_price, return,
+    today_value, delta``. All values in the portfolio's native currency
+    (USD or SGD); for USD portfolios with ``fx_series_usd_sgd`` supplied,
+    also returns ``stmt_value_sgd / today_value_sgd / delta_sgd``.
+
+    Used by the per-portfolio drill-down section in the Phase 1 HTML report —
+    lets the user trace a sleeve's PnL back to each individual holding.
+    """
+    end_date = end.date() if isinstance(end, datetime) else end
+    fetch_start = portfolio.statement_date - timedelta(days=7)
+    symbols = sorted({
+        h.metadata.ticker
+        for h in portfolio.holdings
+        if not h.metadata.ticker.startswith("CASH_")
+    })
+    bars = None
+    if symbols and price_source is not None:
+        try:
+            bars = price_source.get_bars(symbols, fetch_start, end_date)
+        except Exception as exc:  # pragma: no cover — provider failure
+            warnings.warn(f"Could not fetch price bars: {exc}", stacklevel=2)
+
+    def _close_asof(
+        ticker: str, target: date
+    ) -> tuple[float | None, date | None]:
+        """Return (close, actual_date_used) at or before *target*. Forward-fill
+        semantics: if a ticker hasn't traded today, returns the most recent
+        prior close + that date so the caller knows the data is N days stale.
+        """
+        if bars is None or ticker not in bars.index.get_level_values(0):
+            return None, None
+        ser = bars.xs(ticker, level=0)["close"]
+        if ser.empty:
+            return None, None
+        target_ts = (
+            pd.Timestamp(target).tz_localize(ser.index.tz)
+            if ser.index.tz
+            else pd.Timestamp(target)
+        )
+        ser = ser[ser.index <= target_ts]
+        if ser.empty:
+            return None, None
+        last_idx = ser.index[-1]
+        actual_date = last_idx.date() if hasattr(last_idx, "date") else last_idx
+        return float(ser.iloc[-1]), actual_date
+
+    today_spot = (
+        float(fx_series_usd_sgd.dropna().iloc[-1])
+        if fx_series_usd_sgd is not None and not fx_series_usd_sgd.empty
+        else None
+    )
+    stmt_fx = portfolio.metadata.get("statement_fx_usd_sgd")
+    stmt_fx_value = float(stmt_fx) if stmt_fx is not None else None
+    is_usd = portfolio.currency.upper() == "USD"
+
+    def _is_cash_like(asset_class: str | None, sector: str | None) -> bool:
+        """Holdings that can be safely forward-accrued when Yahoo data lags
+        the end_date — only assets where directional risk is negligible
+        (money market funds, cash equivalents, short-duration T-bills)."""
+        ac = (asset_class or "").lower()
+        sec = (sector or "").lower()
+        if ac == "cash":
+            return True
+        if "money market" in sec or "treasury 0-3m" in sec:
+            return True
+        return False
+
+    rows: list[dict[str, Any]] = []
+    for h in portfolio.holdings:
+        t = h.metadata.ticker
+        stmt_value = h.weight * portfolio.total_value
+        label = f"{h.metadata.asset_class} · {h.metadata.region}"
+        accrued_days = 0
+        if t.startswith("CASH_"):
+            days = max((end_date - portfolio.statement_date).days, 0)
+            yield_pa = _CASH_ANNUAL_YIELDS.get(t, 0.0)
+            ret = (1 + yield_pa) ** (days / 365.0) - 1
+            stmt_price = today_price = float("nan")
+            stmt_date_used = portfolio.statement_date
+            today_date_used = end_date
+        else:
+            stmt_price, stmt_date_used = _close_asof(t, portfolio.statement_date)
+            today_price, today_date_used = _close_asof(t, end_date)
+            if stmt_price is None or today_price is None or stmt_price <= 0:
+                ret = 0.0
+                stmt_price = float("nan") if stmt_price is None else stmt_price
+                today_price = float("nan") if today_price is None else today_price
+            else:
+                ret = today_price / stmt_price - 1.0
+                # Forward-accrue stale low-vol prices: if Yahoo data is
+                # behind end_date for a cash/MMF holding, project the
+                # missing days using the holding's own realised yield.
+                if (
+                    today_date_used is not None
+                    and stmt_date_used is not None
+                    and today_date_used < end_date
+                    and _is_cash_like(h.metadata.asset_class, h.metadata.sector)
+                ):
+                    in_data_days = max((today_date_used - stmt_date_used).days, 1)
+                    missing_days = (end_date - today_date_used).days
+                    if missing_days > 0 and in_data_days > 0:
+                        ann_yield = (today_price / stmt_price) ** (
+                            365.0 / in_data_days
+                        ) - 1.0
+                        accrual = (1.0 + ann_yield) ** (
+                            missing_days / 365.0
+                        ) - 1.0
+                        today_price = today_price * (1.0 + accrual)
+                        today_date_used = end_date
+                        ret = today_price / stmt_price - 1.0
+                        accrued_days = missing_days
+        today_value = stmt_value * (1.0 + ret)
+        row = {
+            "ticker": t,
+            "label": label,
+            "weight": h.weight,
+            "stmt_value": stmt_value,
+            "stmt_price": stmt_price,
+            "stmt_date_used": stmt_date_used,
+            "today_price": today_price,
+            "today_date_used": today_date_used,
+            "accrued_days": accrued_days,
+            "return": ret,
+            "today_value": today_value,
+            "delta": today_value - stmt_value,
+        }
+        if is_usd and today_spot and stmt_fx_value:
+            row["stmt_value_sgd"] = stmt_value * stmt_fx_value
+            row["today_value_sgd"] = today_value * today_spot
+            row["delta_sgd"] = row["today_value_sgd"] - row["stmt_value_sgd"]
+        rows.append(row)
+    return pd.DataFrame(rows).sort_values("stmt_value", ascending=False).reset_index(drop=True)
+
+
 def portfolio_reconciliation(
     portfolios: Sequence[Portfolio],
     *,
     end: date | datetime,
     price_source: Any | None = None,
-    returns: pd.DataFrame | None = None,
+    returns: pd.DataFrame | None = None,  # kept for API compat — not used
     fx_series_usd_sgd: pd.Series | None = None,
 ) -> pd.DataFrame:
     """Project each portfolio's value from its statement date to ``end``.
@@ -570,8 +715,15 @@ def portfolio_reconciliation(
 
     SGD values are mark-to-market: ``stmt_sgd = stmt_native × statement-date FX
     (from PDF)``, ``today_sgd = today_native × today's spot FX``. This matches
-    what Stashaway's app displays. (For SGD-base *return* series the rest of
-    the report compounds USD return × daily FX changes — different question.)
+    what Stashaway's app displays.
+
+    Computes ``today_native`` per-holding as
+    ``Σᵢ wᵢ × stmt_value × (price_end_i / price_stmt_i)``. We deliberately do
+    NOT compound a daily portfolio_returns series here — that approach drops
+    every date where ANY holding has NaN (intersection of US/crypto/LSE/SGX
+    trading calendars), losing ~30% of PnL for sleeves that mix asset classes.
+    Per-holding point-to-point only needs 2 prices per ticker and is robust
+    against trading-calendar mismatches.
     """
     holdings_books = [p for p in portfolios if Role.HOLDING in p.roles]
     today_spot = (
@@ -579,36 +731,100 @@ def portfolio_reconciliation(
         if fx_series_usd_sgd is not None and not fx_series_usd_sgd.empty
         else 1.0
     )
+
+    # Batch-fetch all non-cash tickers' price bars once across all portfolios
+    # so we don't re-hit the provider per holding.
+    end_date = end.date() if isinstance(end, datetime) else end
+    stmt_dates = {p.statement_date for p in holdings_books}
+    earliest_start = min(stmt_dates) if stmt_dates else end_date
+    # Pad the start by a few business days so the asof lookup always has data
+    fetch_start = earliest_start - timedelta(days=7)
+    all_symbols = sorted({
+        h.metadata.ticker
+        for p in holdings_books
+        for h in p.holdings
+        if not h.metadata.ticker.startswith("CASH_")
+    })
+    bars: pd.DataFrame | None = None
+    if all_symbols and price_source is not None:
+        try:
+            bars = price_source.get_bars(all_symbols, fetch_start, end_date)
+        except Exception as exc:  # pragma: no cover — provider failure
+            warnings.warn(f"Could not fetch price bars: {exc}", stacklevel=2)
+            bars = None
+
+    def _close_asof_with_date(
+        ticker: str, target: date
+    ) -> tuple[float | None, date | None]:
+        """Most-recent close at or before *target* (forward-fill semantics)."""
+        if bars is None or ticker not in bars.index.get_level_values(0):
+            return None, None
+        ser = bars.xs(ticker, level=0)["close"]
+        if ser.empty:
+            return None, None
+        target_ts = pd.Timestamp(target).tz_localize(ser.index.tz) if ser.index.tz else pd.Timestamp(target)
+        ser = ser[ser.index <= target_ts]
+        if ser.empty:
+            return None, None
+        last_idx = ser.index[-1]
+        actual = last_idx.date() if hasattr(last_idx, "date") else last_idx
+        return float(ser.iloc[-1]), actual
+
+    def _is_cash_like(asset_class: str | None, sector: str | None) -> bool:
+        ac = (asset_class or "").lower()
+        sec = (sector or "").lower()
+        return ac == "cash" or "money market" in sec or "treasury 0-3m" in sec
+
     rows: list[dict[str, Any]] = []
     for p in holdings_books:
-        try:
-            native_series = portfolio_returns(
-                p,
-                start=p.statement_date,
-                end=end,
-                price_source=price_source,
-                returns=returns,
-            )
-        except Exception as exc:
-            warnings.warn(
-                f"Skipping {p.name!r} in reconciliation: {exc}", stacklevel=2
-            )
-            continue
-        # The statement-date return represents what happened DURING that day,
-        # which is already baked into the statement closing balance. Cumulating
-        # it forward double-counts. Drop any rows on or before statement_date.
-        post_stmt = native_series[native_series.index.date > p.statement_date]
-        cum_native = float((1.0 + post_stmt).prod() - 1.0) if not post_stmt.empty else 0.0
+        today_native = 0.0
+        for h in p.holdings:
+            stmt_value = h.weight * p.total_value
+            t = h.metadata.ticker
+            if t.startswith("CASH_"):
+                # Synthetic cash: apply the annual yield prorated by elapsed
+                # calendar days — vol is irrelevant for point-to-point.
+                days = max((end_date - p.statement_date).days, 0)
+                yield_pa = _CASH_ANNUAL_YIELDS.get(t, 0.0)
+                holding_ret = (1 + yield_pa) ** (days / 365.0) - 1
+                today_native += stmt_value * (1 + holding_ret)
+                continue
+            p_stmt, d_stmt = _close_asof_with_date(t, p.statement_date)
+            p_end, d_end = _close_asof_with_date(t, end_date)
+            if p_stmt is None or p_end is None or p_stmt <= 0:
+                today_native += stmt_value
+                continue
+            # Forward-accrue stale low-vol prices (cash / MMF / 0-3M Treasury)
+            # using the holding's own realised yield over the available window.
+            if (
+                d_end is not None
+                and d_stmt is not None
+                and d_end < end_date
+                and _is_cash_like(h.metadata.asset_class, h.metadata.sector)
+            ):
+                in_data_days = max((d_end - d_stmt).days, 1)
+                missing_days = (end_date - d_end).days
+                if missing_days > 0:
+                    ann_yield = (p_end / p_stmt) ** (365.0 / in_data_days) - 1.0
+                    accrual = (1.0 + ann_yield) ** (missing_days / 365.0) - 1.0
+                    p_end = p_end * (1.0 + accrual)
+            today_native += stmt_value * (p_end / p_stmt)
+
+        # Apply management fee (prorated) — same convention as portfolio_returns
+        fee_annual = float(p.metadata.get("management_fee_annual", 0.0))
+        if fee_annual > 0:
+            days = max((end_date - p.statement_date).days, 0)
+            today_native *= (1.0 - fee_annual * days / 365.0)
+
+        cum_native = (today_native / p.total_value) - 1.0 if p.total_value > 0 else 0.0
 
         stmt_fx = p.metadata.get("statement_fx_usd_sgd")
         if p.currency.upper() == "USD":
             stmt_fx_value = float(stmt_fx) if stmt_fx is not None else 1.0
             stmt_sgd = p.total_value * stmt_fx_value
-            today_native = p.total_value * (1.0 + cum_native)
             today_sgd = today_native * today_spot  # mark-to-market — matches app
         else:
             stmt_sgd = p.total_value
-            today_native = p.total_value * (1.0 + cum_native)
             today_sgd = today_native  # SGD-native: no FX conversion
 
         return_sgd = (today_sgd / stmt_sgd) - 1.0 if stmt_sgd > 0 else 0.0
@@ -1369,6 +1585,12 @@ def render_html_report(
         book_performance=_book_performance_to_html(book_perf),
         reconciliation=_reconciliation_to_html(reconciliation),
         reconciliation_as_of=reconciliation_as_of_label,
+        holdings_drilldown=_holdings_drilldown_to_html(
+            portfolios,
+            end=reconciliation_end,
+            price_source=price_source,
+            fx_series_usd_sgd=fx_series_usd_sgd,
+        ),
         redundancy=_redundancy_to_html(pairs, threshold=redundancy_threshold),
         risk_by_portfolio=_risk_to_html(risk["by_portfolio"]),
         risk_by_holding=_risk_to_html(risk["by_holding"]),
@@ -1525,6 +1747,267 @@ def _reconciliation_to_html(df: pd.DataFrame) -> str:
         .set_table_attributes('class="ds-table"')
     )
     return styler.to_html()
+
+
+_PORTFOLIO_GOAL_RE = re.compile(r"/goal/([0-9a-f]{24})", re.IGNORECASE)
+
+
+def _portfolio_goal_links(
+    portfolios: Sequence[Portfolio],
+    links_path: Path = Path("data/holding links.xlsx"),
+) -> dict[str, str]:
+    """Best-effort map of portfolio name → Stashaway app goal URL.
+
+    Reads the user's holding-links file, extracts the goal_id from any URL
+    associated with the portfolio (URLs look like
+    ``app.stashaway.sg/asset-details/<ticker>/goal/<goal_id>``), and returns
+    a goal-page URL per portfolio. Returns empty dict if the file is missing.
+    """
+    if not links_path.exists():
+        return {}
+    try:
+        import openpyxl  # type: ignore[import-untyped]
+    except ImportError:
+        return {}
+    portfolio_aliases = {"SRS": "General SRS"}
+    out: dict[str, str] = {}
+    try:
+        wb = openpyxl.load_workbook(links_path, data_only=False)
+        if "Portfolios" not in wb.sheetnames:
+            return {}
+        ws = wb["Portfolios"]
+        HEADER_ROW = 7
+        hdr_to_col: dict[str, int] = {}
+        for c in range(1, ws.max_column + 1):
+            v = ws.cell(row=HEADER_ROW, column=c).value
+            if v is not None:
+                hdr_to_col[str(v).strip()] = c
+        port_col = hdr_to_col.get("Port", 6)
+        link_col = hdr_to_col.get("Link", 10)
+        for r in range(HEADER_ROW + 1, ws.max_row + 1):
+            port = ws.cell(row=r, column=port_col).value
+            link_cell = ws.cell(row=r, column=link_col)
+            url = link_cell.hyperlink.target if link_cell.hyperlink else None
+            if not port or not url:
+                continue
+            name = portfolio_aliases.get(str(port), str(port))
+            if name in out:
+                continue
+            m = _PORTFOLIO_GOAL_RE.search(str(url))
+            if m:
+                out[name] = f"https://app.stashaway.sg/goal/{m.group(1)}"
+    except Exception:
+        return {}
+    portfolio_names = {p.name for p in portfolios}
+    return {n: u for n, u in out.items() if n in portfolio_names}
+
+
+def _holdings_drilldown_to_html(
+    portfolios: Sequence[Portfolio],
+    *,
+    end: date | datetime,
+    price_source: Any | None = None,
+    fx_series_usd_sgd: pd.Series | None = None,
+) -> str:
+    """Render a collapsible per-portfolio drill-down listing each holding's
+    starting value, return since statement, current value, and weight.
+
+    Uses native HTML <details>/<summary> for free collapse behaviour. One
+    section per HOLDING-tagged portfolio, sorted by AUM desc. Portfolio names
+    link to the Stashaway app goal page when discoverable from
+    ``data/holding links.xlsx``.
+    """
+    holdings_books = sorted(
+        [p for p in portfolios if Role.HOLDING in p.roles],
+        key=lambda p: -p.total_value,
+    )
+    if not holdings_books:
+        return "<p>No portfolios to drill into.</p>"
+
+    goal_urls = _portfolio_goal_links(portfolios)
+
+    intro = (
+        '<p class="footnote">Click any portfolio to expand its holdings. '
+        "Each row shows the holding's value at statement date, today's spot price, "
+        "return since statement (price-only, no distributions reinvested past today), "
+        "and current value. Each table has a <strong>📋 Copy</strong> button that "
+        "copies headers + rows + the Total row as tab-separated text — paste straight "
+        "into Excel/Sheets. Portfolio names are linked to the Stashaway app where "
+        "discoverable from your <code>holding links.xlsx</code>.</p>"
+    )
+    sections: list[str] = []
+    for p in holdings_books:
+        df = holdings_reconciliation(
+            p, end=end, price_source=price_source, fx_series_usd_sgd=fx_series_usd_sgd
+        )
+        if df.empty:
+            continue
+        # Build a Total row so it copies cleanly to Excel.
+        total_stmt = float(df["stmt_value"].sum())
+        total_today = float(df["today_value"].sum())
+        delta = total_today - total_stmt
+        ret = (total_today / total_stmt - 1) if total_stmt > 0 else 0.0
+        total_row = pd.DataFrame(
+            [{
+                "ticker": "Total",
+                "label": "",
+                "weight": 1.0,
+                "stmt_value": total_stmt,
+                "stmt_price": float("nan"),
+                "stmt_date_used": pd.NaT,
+                "today_price": float("nan"),
+                "today_date_used": pd.NaT,
+                "return": ret,
+                "today_value": total_today,
+                "delta": delta,
+            }]
+        )
+        # Preserve any sgd-mirror columns from df with NaN so concat works
+        for col in df.columns:
+            if col not in total_row.columns:
+                if col.endswith("_sgd"):
+                    total_row[col] = df[col].sum()
+                else:
+                    total_row[col] = float("nan")
+        df_with_total = pd.concat([df, total_row], ignore_index=True)
+
+        ccy = p.currency.upper()
+        delta_cls = "pos" if delta >= 0 else "neg"
+        portfolio_name_html = (
+            f'<a href="{goal_urls[p.name]}" target="_blank" rel="noopener" class="port-link">{p.name}</a>'
+            if p.name in goal_urls
+            else f"<strong>{p.name}</strong>"
+        )
+        # Summary delta: native always; SGD also shown for USD portfolios so
+        # the user has both currencies at a glance without expanding the table.
+        delta_label = f"{_fmt_compact_precise_signed(delta)} {ccy}"
+        if ccy == "USD" and "delta_sgd" in df.columns:
+            delta_sgd_sum = float(df["delta_sgd"].sum())
+            delta_label += f" / {_fmt_compact_precise_signed(delta_sgd_sum)} SGD"
+        summary_line = (
+            f"{portfolio_name_html} · "
+            f"{p.currency} {_fmt_compact_precise(total_stmt)} → "
+            f"<span class=\"{delta_cls}\">{_fmt_compact_precise(total_today)}</span> "
+            f"(<span class=\"{delta_cls}\">{delta_label}, {ret:+.2%}</span>) · "
+            f"{len(df)} holdings"
+        )
+
+        col_stmt_val = f"Stmt value ({ccy})"
+        col_today_val = f"Today value ({ccy})"
+        col_delta = f"Δ value ({ccy})"
+        col_stmt_px = f"Stmt price ({ccy})"
+        col_today_px = f"Today price ({ccy})"
+        col_stmt_sgd = "Stmt value (SGD)"
+        col_today_sgd = "Today value (SGD)"
+        col_delta_sgd = "Δ value (SGD)"
+        display = df_with_total.rename(
+            columns={
+                "ticker": "Ticker",
+                "label": "Asset · Region",
+                "weight": "Weight",
+                "stmt_value": col_stmt_val,
+                "stmt_price": col_stmt_px,
+                "stmt_date_used": "Stmt date",
+                "today_price": col_today_px,
+                "today_date_used": "Today date",
+                "return": "Δ%",
+                "today_value": col_today_val,
+                "delta": col_delta,
+                "stmt_value_sgd": col_stmt_sgd,
+                "today_value_sgd": col_today_sgd,
+                "delta_sgd": col_delta_sgd,
+            }
+        )
+        # Column order: native values clustered, then SGD mirror at the right
+        # (only present for USD portfolios when FX is available). Date columns
+        # sit next to their price columns so staleness is immediately visible.
+        ordered = [
+            "Ticker", "Asset · Region", "Weight",
+            col_stmt_val,
+            col_stmt_px, "Stmt date",
+            col_today_px, "Today date",
+            "Δ%", col_today_val, col_delta,
+        ]
+        if ccy == "USD" and col_stmt_sgd in display.columns:
+            ordered += [col_stmt_sgd, col_today_sgd, col_delta_sgd]
+        # Dedupe while preserving order — SGD-native portfolios have
+        # col_delta == col_delta_sgd (both "Δ value (SGD)"), which would
+        # otherwise create a duplicate column reference in the styler subset.
+        seen: set[str] = set()
+        dedup_ordered = []
+        for c in ordered:
+            if c in display.columns and c not in seen:
+                dedup_ordered.append(c)
+                seen.add(c)
+        display = display[dedup_ordered]
+
+        # Flag rows where forward-accrual was applied so the date cell
+        # reads e.g. "2026-05-29* (+1d)". Pre-convert per-row so the
+        # Styler formatter (which is row-blind) gets the right marker.
+        def _date_with_marker(v: Any, accrued: int) -> str:
+            if v is None or (isinstance(v, float) and v != v) or pd.isna(v):
+                return "—"
+            if isinstance(v, date):
+                base = v.isoformat()
+                return f"{base}* (+{int(accrued)}d)" if accrued else base
+            return str(v)
+
+        if "accrued_days" in df_with_total.columns:
+            df_with_total["today_date_used"] = [
+                _date_with_marker(d, a or 0)
+                for d, a in zip(
+                    df_with_total["today_date_used"],
+                    df_with_total["accrued_days"],
+                )
+            ]
+
+        def _fmt_date(v: Any) -> str:
+            if v is None or (isinstance(v, float) and v != v) or pd.isna(v):
+                return "—"
+            if isinstance(v, date):
+                return v.isoformat()
+            return str(v)
+
+        formatters: dict[str, Any] = {
+            "Weight": "{:.2%}".format,
+            col_stmt_val: _fmt_compact_precise,
+            col_stmt_px: "{:,.4f}".format,
+            "Stmt date": _fmt_date,
+            col_today_px: "{:,.4f}".format,
+            "Today date": _fmt_date,
+            "Δ%": "{:+.2%}".format,
+            col_today_val: _fmt_compact_precise,
+            col_delta: _fmt_compact_precise_signed,
+            col_stmt_sgd: _fmt_compact_precise,
+            col_today_sgd: _fmt_compact_precise,
+            col_delta_sgd: _fmt_compact_precise_signed,
+        }
+        # Subset for pos/neg tint — dedupe in case col_delta == col_delta_sgd
+        # (true for SGD-native portfolios where both labels resolve to
+        # "Δ value (SGD)" — passing the same column twice trips pandas Styler).
+        delta_cols: list[str] = []
+        for c in (col_delta, col_delta_sgd):
+            if c in display.columns and c not in delta_cols:
+                delta_cols.append(c)
+        total_idx = len(display) - 1
+        styler = (
+            display.style.format(formatters, na_rep="—")
+            .map(_style_pos_neg, subset=["Δ%"] + delta_cols)
+            .set_table_styles(
+                [{"selector": f"tbody tr:nth-child({total_idx + 1}) td",
+                  "props": "font-weight: 600; border-top: 2px solid #30363d;"}],
+                overwrite=False,
+            )
+            .hide(axis="index")
+            .set_table_attributes('class="ds-table ds-holdings"')
+        )
+        sections.append(
+            f'<details class="drill"><summary>{summary_line}</summary>'
+            f'{styler.to_html()}</details>'
+        )
+    if not sections:
+        return "<p>No holding-level data available.</p>"
+    return intro + "\n".join(sections)
 
 
 def _exposure_to_html(exposure: dict[str, pd.DataFrame]) -> dict[str, str]:

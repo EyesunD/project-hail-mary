@@ -45,6 +45,26 @@
   .ds-table thead th:hover { background: #1f2730; }
   .ds-table thead th[data-sort-dir="asc"]::after { content: " ▲"; color: #58a6ff; }
   .ds-table thead th[data-sort-dir="desc"]::after { content: " ▼"; color: #58a6ff; }
+  details.drill { background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+                  padding: 8px 14px; margin: 8px 0; }
+  details.drill[open] { padding-bottom: 14px; }
+  details.drill summary { cursor: pointer; user-select: none; font-size: 13px;
+                          color: #e6edf3; padding: 4px 0; }
+  details.drill summary:hover { color: #58a6ff; }
+  details.drill summary .pos { color: #3fb950; }
+  details.drill summary .neg { color: #f85149; }
+  details.drill .ds-holdings { margin-top: 10px; width: 100%; max-width: 1100px; }
+  .copy-wrap { margin-top: 8px; }
+  .copy-btn { background: #161b22; color: #8b949e; border: 1px solid #30363d;
+              border-radius: 4px; padding: 3px 9px; font-size: 11px;
+              font-family: inherit; cursor: pointer; user-select: none;
+              transition: background 0.15s, color 0.15s, border-color 0.15s; }
+  .copy-btn:hover { background: #1f2730; color: #e6edf3; border-color: #58a6ff; }
+  .copy-btn.copied { background: rgba(63, 185, 80, 0.18); color: #3fb950;
+                     border-color: #3fb950; }
+  details.drill summary a.port-link { color: #58a6ff; font-weight: 600;
+                                       text-decoration: none; border-bottom: 1px dotted #58a6ff; }
+  details.drill summary a.port-link:hover { color: #a371f7; border-bottom-color: #a371f7; }
 </style>
 </head><body>
 <h1>{{ title }}</h1>
@@ -85,6 +105,9 @@
       practical "how much have I made on this sleeve this month" number.</li>
 </ul>
 {{ reconciliation | safe }}
+
+<h3>Per-portfolio drill-down — holding-by-holding reconciliation</h3>
+{{ holdings_drilldown | safe }}
 
 <h2>Combined-book exposure</h2>
 {{ exposure_cards | safe }}
@@ -251,8 +274,72 @@
     });
   }
 
+  function tableToTsv(table) {
+    var lines = [];
+    var headerRows = table.querySelectorAll("thead tr");
+    var headerRow = headerRows[headerRows.length - 1];
+    if (headerRow) {
+      lines.push(Array.prototype.map.call(headerRow.cells, function (c) {
+        return c.textContent.trim();
+      }).join("\t"));
+    }
+    var tbody = table.querySelector("tbody");
+    if (tbody) {
+      Array.prototype.forEach.call(tbody.rows, function (r) {
+        lines.push(Array.prototype.map.call(r.cells, function (c) {
+          return c.textContent.trim();
+        }).join("\t"));
+      });
+    }
+    return lines.join("\n");
+  }
+
+  function attachCopyButton(table) {
+    if (table.dataset.copyAttached) return;
+    table.dataset.copyAttached = "1";
+    var wrap = document.createElement("div");
+    wrap.className = "copy-wrap";
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "copy-btn";
+    btn.textContent = "📋 Copy";
+    btn.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      ev.preventDefault();
+      var tsv = tableToTsv(table);
+      var ok = function () {
+        var was = btn.textContent;
+        btn.textContent = "✓ Copied";
+        btn.classList.add("copied");
+        setTimeout(function () {
+          btn.textContent = was;
+          btn.classList.remove("copied");
+        }, 1400);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(tsv).then(ok, function () {
+          // Fallback for browsers/security contexts that block clipboard API
+          var ta = document.createElement("textarea");
+          ta.value = tsv; ta.style.position = "fixed"; ta.style.opacity = "0";
+          document.body.appendChild(ta); ta.select();
+          try { document.execCommand("copy"); ok(); }
+          finally { document.body.removeChild(ta); }
+        });
+      } else {
+        var ta = document.createElement("textarea");
+        ta.value = tsv; ta.style.position = "fixed"; ta.style.opacity = "0";
+        document.body.appendChild(ta); ta.select();
+        try { document.execCommand("copy"); ok(); }
+        finally { document.body.removeChild(ta); }
+      }
+    });
+    wrap.appendChild(btn);
+    table.parentNode.insertBefore(wrap, table);
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     document.querySelectorAll("table.ds-table").forEach(makeSortable);
+    document.querySelectorAll("table.ds-table").forEach(attachCopyButton);
   });
 })();
 </script>

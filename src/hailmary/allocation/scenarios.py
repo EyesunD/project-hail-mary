@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -23,6 +24,8 @@ from hailmary.allocation.portfolios import (
     Portfolio,
     Role,
 )
+
+_SCENARIO_TEMPLATE_PATH = Path(__file__).parent / "_scenario_report_template.html.j2"
 
 
 class ScenarioEditError(Exception):
@@ -661,3 +664,418 @@ def scenario_compare(
         risk=(cur_risk, prop_risk),
         benchmarks=(cur_bench, prop_bench),
     )
+
+
+# ---------------------------------------------------------------------------
+# HTML report (chunk 3)
+# ---------------------------------------------------------------------------
+
+
+def _delta_card(label: str, value_html: str, sub: str = "") -> str:
+    sub_html = f'<div class="sub">{sub}</div>' if sub else ""
+    return (
+        f'<div class="delta-card"><div class="label">{label}</div>'
+        f'<div class="val">{value_html}</div>{sub_html}</div>'
+    )
+
+
+def _sign_class(val: float, *, invert: bool = False) -> str:
+    if pd.isna(val) or val == 0:
+        return "neu"
+    good = val > 0
+    if invert:
+        good = not good
+    return "pos" if good else "neg"
+
+
+def _fmt_signed_pct(val: float, places: int = 2) -> str:
+    if pd.isna(val):
+        return "—"
+    return f"{val:+.{places}%}"
+
+
+def _fmt_signed_num(val: float, places: int = 2) -> str:
+    if pd.isna(val):
+        return "—"
+    return f"{val:+.{places}f}"
+
+
+def _delta_strip_html(diff: ScenarioDiff) -> str:
+    from hailmary.allocation.diagnostic import _fmt_compact_precise_signed
+
+    d = diff.deltas
+    cards: list[str] = []
+
+    sharpe_cls = _sign_class(d.book_sharpe_delta)
+    cards.append(
+        _delta_card(
+            "Δ Sharpe (ann.)",
+            f'<span class="{sharpe_cls}">{_fmt_signed_num(d.book_sharpe_delta)}</span>',
+            sub="proposed − current",
+        )
+    )
+    ret_cls = _sign_class(d.book_ann_return_delta)
+    cards.append(
+        _delta_card(
+            "Δ Ann. return",
+            f'<span class="{ret_cls}">{_fmt_signed_pct(d.book_ann_return_delta)}</span>',
+        )
+    )
+    # Vol delta: no universal sign — lower vol isn't strictly better. Show neutral.
+    cards.append(
+        _delta_card(
+            "Δ Ann. vol",
+            f'<span class="neu">{_fmt_signed_pct(d.book_ann_vol_delta)}</span>',
+            sub="↓ vol ≠ always good",
+        )
+    )
+    # Max DD delta: positive = less negative DD = good.
+    dd_cls = _sign_class(d.book_max_dd_delta)
+    cards.append(
+        _delta_card(
+            "Δ Max DD",
+            f'<span class="{dd_cls}">{_fmt_signed_pct(d.book_max_dd_delta)}</span>',
+            sub="+ = shallower DD",
+        )
+    )
+    aum_cls = _sign_class(d.book_aum_delta)
+    aum_str = _fmt_compact_precise_signed(d.book_aum_delta)
+    cards.append(
+        _delta_card(
+            "Δ AUM",
+            f'<span class="{aum_cls}">{aum_str}</span>',
+            sub="book size change",
+        )
+    )
+    appeared = len(d.redundancy_appeared)
+    disappeared = len(d.redundancy_disappeared)
+    persisted = len(d.redundancy_persisted)
+    if appeared > disappeared:
+        red_cls = "neg"
+    elif disappeared > appeared:
+        red_cls = "pos"
+    else:
+        red_cls = "neu"
+    cards.append(
+        _delta_card(
+            "Redundancy pairs",
+            f'<span class="{red_cls}">+{appeared} / −{disappeared}</span>',
+            sub=f"{persisted} persisted",
+        )
+    )
+    return f'<div class="delta-strip">{"".join(cards)}</div>'
+
+
+def _by_period_html(diff: ScenarioDiff) -> str:
+    from hailmary.allocation.diagnostic import _style_dd_delta, _style_pos_neg
+
+    df = diff.deltas.by_period_deltas
+    if df is None or df.empty:
+        return "<p>No per-period data available.</p>"
+
+    display = df.rename(
+        columns={
+            "period": "Period",
+            "cur_sharpe": "Cur Sharpe",
+            "prop_sharpe": "Prop Sharpe",
+            "delta_sharpe": "Δ Sharpe",
+            "cur_ann_return": "Cur Ann. ret",
+            "prop_ann_return": "Prop Ann. ret",
+            "delta_ann_return": "Δ Ann. ret",
+            "cur_ann_vol": "Cur Vol",
+            "prop_ann_vol": "Prop Vol",
+            "delta_ann_vol": "Δ Vol",
+            "cur_max_dd": "Cur DD",
+            "prop_max_dd": "Prop DD",
+            "delta_max_dd": "Δ DD",
+        }
+    )
+    column_order = [
+        "Period",
+        "Cur Sharpe", "Prop Sharpe", "Δ Sharpe",
+        "Cur Ann. ret", "Prop Ann. ret", "Δ Ann. ret",
+        "Cur Vol", "Prop Vol", "Δ Vol",
+        "Cur DD", "Prop DD", "Δ DD",
+    ]
+    display = display[[c for c in column_order if c in display.columns]]
+
+    formatters: dict[str, Any] = {
+        "Cur Sharpe": "{:.2f}".format,
+        "Prop Sharpe": "{:.2f}".format,
+        "Δ Sharpe": "{:+.2f}".format,
+        "Cur Ann. ret": "{:+.2%}".format,
+        "Prop Ann. ret": "{:+.2%}".format,
+        "Δ Ann. ret": "{:+.2%}".format,
+        "Cur Vol": "{:.2%}".format,
+        "Prop Vol": "{:.2%}".format,
+        "Δ Vol": "{:+.2%}".format,
+        "Cur DD": "{:.2%}".format,
+        "Prop DD": "{:.2%}".format,
+        "Δ DD": "{:+.2%}".format,
+    }
+    styler = display.style.format(formatters, na_rep="—")
+    if "Δ Sharpe" in display.columns:
+        styler = styler.map(_style_pos_neg, subset=["Δ Sharpe"])
+    if "Δ Ann. ret" in display.columns:
+        styler = styler.map(_style_pos_neg, subset=["Δ Ann. ret"])
+    if "Δ DD" in display.columns:
+        styler = styler.map(_style_dd_delta, subset=["Δ DD"])
+    styler = styler.hide(axis="index").set_table_attributes('class="ds-table"')
+    return styler.to_html()
+
+
+def _tail_metrics_html(diff: ScenarioDiff) -> str:
+    from hailmary.allocation.diagnostic import _style_pos_neg
+
+    df = diff.deltas.tail_metrics
+    if df is None or df.empty:
+        return "<p>No tail-window data available.</p>"
+
+    display = df.copy()
+    display.insert(0, "Window", display.index)
+    display = display.rename(
+        columns={
+            "cur_best": "Cur best",
+            "cur_best_date": "Cur best on",
+            "cur_worst": "Cur worst",
+            "cur_worst_date": "Cur worst on",
+            "prop_best": "Prop best",
+            "prop_best_date": "Prop best on",
+            "prop_worst": "Prop worst",
+            "prop_worst_date": "Prop worst on",
+            "delta_best": "Δ best",
+            "delta_worst": "Δ worst",
+        }
+    )[
+        [
+            "Window",
+            "Cur best", "Cur best on",
+            "Prop best", "Prop best on",
+            "Δ best",
+            "Cur worst", "Cur worst on",
+            "Prop worst", "Prop worst on",
+            "Δ worst",
+        ]
+    ]
+
+    def _fmt_date(v: Any) -> str:
+        if v is None or pd.isna(v):
+            return "—"
+        if isinstance(v, date):
+            return v.isoformat()
+        return str(v)
+
+    formatters: dict[str, Any] = {
+        "Cur best": "{:+.2%}".format,
+        "Prop best": "{:+.2%}".format,
+        "Δ best": "{:+.2%}".format,
+        "Cur worst": "{:+.2%}".format,
+        "Prop worst": "{:+.2%}".format,
+        "Δ worst": "{:+.2%}".format,
+        "Cur best on": _fmt_date,
+        "Cur worst on": _fmt_date,
+        "Prop best on": _fmt_date,
+        "Prop worst on": _fmt_date,
+    }
+    styler = (
+        display.style.format(formatters, na_rep="—")
+        .map(_style_pos_neg, subset=["Δ best", "Δ worst"])
+        .hide(axis="index")
+        .set_table_attributes('class="ds-table"')
+    )
+    return styler.to_html()
+
+
+def _per_portfolio_html(diff: ScenarioDiff) -> str:
+    from hailmary.allocation.diagnostic import _style_dd_delta, _style_pos_neg
+
+    d = diff.deltas
+    names = sorted(d.per_portfolio_sharpe_delta.keys())
+    if not names:
+        return "<p>No portfolios common to both scenarios.</p>"
+    rows = [
+        {
+            "Portfolio": name,
+            "Δ Sharpe": d.per_portfolio_sharpe_delta.get(name, float("nan")),
+            "Δ Vol": d.per_portfolio_vol_delta.get(name, float("nan")),
+            "Δ Max DD": d.per_portfolio_max_dd_delta.get(name, float("nan")),
+        }
+        for name in names
+    ]
+    display = pd.DataFrame(rows)
+    formatters = {
+        "Δ Sharpe": "{:+.2f}".format,
+        "Δ Vol": "{:+.2%}".format,
+        "Δ Max DD": "{:+.2%}".format,
+    }
+    styler = (
+        display.style.format(formatters, na_rep="—")
+        .map(_style_pos_neg, subset=["Δ Sharpe"])
+        .map(_style_dd_delta, subset=["Δ Max DD"])
+        .hide(axis="index")
+        .set_table_attributes('class="ds-table"')
+    )
+    return styler.to_html()
+
+
+def _exposure_delta_html(diff: ScenarioDiff) -> str:
+    from hailmary.allocation.diagnostic import (
+        _fmt_compact,
+        _fmt_compact_signed,
+        _style_pos_neg,
+    )
+
+    if not diff.deltas.exposure_delta:
+        return "<p>No exposure deltas available.</p>"
+
+    blocks: list[str] = []
+    for dim, df in diff.deltas.exposure_delta.items():
+        if df.empty:
+            continue
+        label = dim.replace("_", " ").title()
+        display = df.rename(
+            columns={
+                "bucket": "Bucket",
+                "weight_cur": "Cur wt",
+                "weight_prop": "Prop wt",
+                "weight_delta": "Δ wt",
+                "value_cur": "Cur $",
+                "value_prop": "Prop $",
+                "value_delta": "Δ $",
+            }
+        )[["Bucket", "Cur wt", "Prop wt", "Δ wt", "Cur $", "Prop $", "Δ $"]]
+        formatters = {
+            "Cur wt": "{:.2%}".format,
+            "Prop wt": "{:.2%}".format,
+            "Δ wt": "{:+.2%}".format,
+            "Cur $": _fmt_compact,
+            "Prop $": _fmt_compact,
+            "Δ $": _fmt_compact_signed,
+        }
+        styler = (
+            display.style.format(formatters, na_rep="—")
+            .map(_style_pos_neg, subset=["Δ wt", "Δ $"])
+            .hide(axis="index")
+            .set_table_attributes('class="ds-table"')
+        )
+        blocks.append(f"<div><h3>{label}</h3>{styler.to_html()}</div>")
+    return "".join(blocks)
+
+
+def _redundancy_lifecycle_html(
+    diff: ScenarioDiff, threshold: float
+) -> str:
+    from hailmary.allocation.diagnostic import _style_rho
+
+    d = diff.deltas
+    parts: list[str] = []
+
+    def _simple_pair_table(
+        rows: list[tuple[str, str, float]], caption: str
+    ) -> str:
+        if not rows:
+            return f"<p><em>{caption}:</em> none.</p>"
+        df = pd.DataFrame(rows, columns=["Portfolio A", "Portfolio B", "ρ"])
+        styler = (
+            df.style.format({"ρ": "{:.3f}".format})
+            .map(_style_rho, subset=["ρ"])
+            .hide(axis="index")
+            .set_table_attributes('class="ds-table"')
+        )
+        return f"<h3>{caption}</h3>{styler.to_html()}"
+
+    parts.append(
+        _simple_pair_table(d.redundancy_appeared, "Appeared in proposed")
+    )
+    parts.append(
+        _simple_pair_table(d.redundancy_disappeared, "Disappeared in proposed")
+    )
+
+    if d.redundancy_persisted:
+        df = pd.DataFrame(
+            d.redundancy_persisted,
+            columns=["Portfolio A", "Portfolio B", "ρ current", "ρ proposed"],
+        )
+        df["Δρ"] = df["ρ proposed"] - df["ρ current"]
+        styler = (
+            df.style.format(
+                {
+                    "ρ current": "{:.3f}".format,
+                    "ρ proposed": "{:.3f}".format,
+                    "Δρ": "{:+.3f}".format,
+                }
+            )
+            .map(_style_rho, subset=["ρ current", "ρ proposed"])
+            .hide(axis="index")
+            .set_table_attributes('class="ds-table"')
+        )
+        parts.append(f"<h3>Persisted in both</h3>{styler.to_html()}")
+    else:
+        parts.append("<p><em>Persisted in both:</em> none.</p>")
+
+    if not d.redundancy_appeared and not d.redundancy_disappeared and not d.redundancy_persisted:
+        return (
+            f"<p>No portfolio pairs cross threshold {threshold:.2f} "
+            "in either scenario.</p>"
+        )
+    return "".join(parts)
+
+
+def _load_scenario_template() -> Any:
+    import jinja2
+
+    if _SCENARIO_TEMPLATE_PATH.exists():
+        env = jinja2.Environment(
+            loader=jinja2.FileSystemLoader(str(_SCENARIO_TEMPLATE_PATH.parent)),
+            autoescape=jinja2.select_autoescape(["html"]),
+        )
+        return env.get_template(_SCENARIO_TEMPLATE_PATH.name)
+    raise FileNotFoundError(
+        f"Scenario report template not found at {_SCENARIO_TEMPLATE_PATH}"
+    )
+
+
+def render_scenario_report(
+    diff: ScenarioDiff,
+    output_path: Path | str,
+    *,
+    title: str = "Scenario Comparison",
+    redundancy_threshold: float = 0.85,
+) -> Path:
+    """Render a :class:`ScenarioDiff` to a self-contained HTML report.
+
+    Layout (top → bottom): meta block, headline delta strip, per-period
+    (regime) table, rolling best/worst tail-metrics table, per-portfolio
+    shifts, exposure-bucket deltas (one sub-table per dimension), redundancy
+    lifecycle (appeared/disappeared/persisted). All deltas are
+    ``proposed − current``.
+
+    Same dark theme, ``ds-table`` class, and click-to-sort behaviour as the
+    Phase 1 report. No external assets — open the file in a browser.
+    """
+    from importlib.util import find_spec
+
+    if find_spec("jinja2") is None:
+        raise ImportError(
+            "jinja2 is required for HTML reports. "
+            'Install with: pip install -e ".[allocation]"'
+        )
+
+    template = _load_scenario_template()
+    rendered = template.render(
+        title=title,
+        generated_at=datetime.now().isoformat(timespec="seconds"),
+        current_label=diff.current.label,
+        proposed_label=diff.proposed.label,
+        redundancy_threshold=f"{redundancy_threshold:.2f}",
+        delta_strip=_delta_strip_html(diff),
+        by_period=_by_period_html(diff),
+        tail_metrics=_tail_metrics_html(diff),
+        per_portfolio=_per_portfolio_html(diff),
+        exposure_delta=_exposure_delta_html(diff),
+        redundancy_section=_redundancy_lifecycle_html(diff, redundancy_threshold),
+    )
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(rendered, encoding="utf-8")
+    return out

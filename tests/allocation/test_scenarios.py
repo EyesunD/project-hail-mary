@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 from datetime import date
 
+import pandas as pd
 import pytest
 
 from hailmary.allocation.portfolios import Holding, Portfolio, Role
@@ -16,6 +17,7 @@ from hailmary.allocation.scenarios import (
     drop_portfolio,
     merge_into,
     rebalance_into,
+    render_scenario_report,
     scenario_compare,
     set_weights,
 )
@@ -458,3 +460,35 @@ def test_scenario_compare_exposure_delta_matches_dropped_portfolio(
     # Proposed should have less Equity and less Commodity by those amounts
     assert ac.loc["Equity", "value_delta"] == pytest.approx(-15_000.0, rel=1e-6)
     assert ac.loc["Commodity", "value_delta"] == pytest.approx(-35_000.0, rel=1e-6)
+
+
+def test_render_scenario_report_writes_self_contained_html(
+    tmp_path: object,
+    seeded_universe: object,
+    synthetic_returns: pd.DataFrame,
+) -> None:
+    book = _book_with_benchmark(seeded_universe)
+    proposed = drop_portfolio(book, "Crypto")
+    cur = Scenario(label="current-book", portfolios=tuple(book))
+    prop = Scenario(label="drop-Crypto", portfolios=proposed)
+    diff = scenario_compare(cur, prop, returns=synthetic_returns)
+
+    out = render_scenario_report(diff, tmp_path / "scenario.html")  # type: ignore[operator]
+    assert out.exists()
+    text = out.read_text(encoding="utf-8")
+    # File is non-trivial
+    assert len(text) > 5_000
+    # Both scenario labels surface in the report
+    assert "current-book" in text
+    assert "drop-Crypto" in text
+    # Each section is rendered
+    assert "Headline deltas" in text
+    assert "Regime variance" in text
+    assert "Tail-risk sanity" in text
+    assert "Per-portfolio shifts" in text
+    assert "Exposure shift" in text
+    assert "Redundancy lifecycle" in text
+    # Per-portfolio table mentions a portfolio common to both books
+    assert "GI" in text
+    # Sort script is present so headers are clickable
+    assert "data-sort-dir" in text

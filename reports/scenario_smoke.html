@@ -1,0 +1,1088 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>Smoke test - Crypto -> BlackRock</title>
+<style>
+  body { font-family: Inter, system-ui, sans-serif; background: #0d1117; color: #e6edf3;
+         margin: 0; padding: 24px; }
+  h1, h2, h3 { color: #e6edf3; }
+  h2 { border-bottom: 1px solid #30363d; padding-bottom: 6px; margin-top: 32px; }
+  h3 { margin-top: 18px; color: #58a6ff; }
+  .meta { color: #8b949e; font-size: 13px; }
+  .scen-labels { display: flex; gap: 24px; margin: 6px 0 18px; font-size: 14px; }
+  .scen-labels .cur { color: #8b949e; }
+  .scen-labels .prop { color: #58a6ff; font-weight: 600; }
+
+  .delta-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+                 gap: 12px; margin: 16px 0; }
+  .delta-card { background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+                padding: 12px 16px; }
+  .delta-card .label { font-size: 12px; color: #8b949e; }
+  .delta-card .val   { font-size: 22px; font-weight: 600; margin-top: 4px;
+                       font-variant-numeric: tabular-nums; }
+  .delta-card .sub   { font-size: 11px; color: #8b949e; margin-top: 2px; }
+  .pos { color: #3fb950; }
+  .neg { color: #f85149; }
+  .neu { color: #8b949e; }
+
+  .ds-table { border-collapse: collapse; margin-top: 8px; font-size: 12px; }
+  .ds-table th, .ds-table td { border: 1px solid #30363d; padding: 3px 7px; text-align: right; }
+  .ds-table th { background: #161b22; text-align: left; cursor: pointer; user-select: none; }
+  .ds-table th:hover { background: #1f2730; }
+  .ds-table th[data-sort-dir="asc"]::after { content: " ▲"; color: #58a6ff; }
+  .ds-table th[data-sort-dir="desc"]::after { content: " ▼"; color: #58a6ff; }
+  .ds-table td:first-child, .ds-table th:first-child { text-align: left; }
+  .ds-table td { font-variant-numeric: tabular-nums; }
+
+  .footnote { color: #8b949e; font-size: 12px; line-height: 1.45; max-width: 1100px; margin: 10px 0; }
+  .footnote code { background: #161b22; padding: 1px 4px; border-radius: 3px; font-size: 11.5px; }
+  .caveat { background: #161b22; border-left: 3px solid #d29922; padding: 10px 14px;
+            margin: 16px 0; color: #d29922; font-size: 13px; }
+
+  .three-col { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+               gap: 16px; align-items: start; }
+</style>
+</head><body>
+<h1>Smoke test - Crypto -> BlackRock</h1>
+<p class="meta">Generated 2026-05-30T12:42:12</p>
+<div class="scen-labels">
+  <div class="cur">Current: <strong>current</strong></div>
+  <div>→</div>
+  <div class="prop">Proposed: <strong>Crypto -> BlackRock</strong></div>
+</div>
+
+<div class="caveat">
+  All deltas are <strong>proposed − current</strong>. Sign convention: positive Sharpe / return / ΔVol-if-removed = better for proposed; negative max-drawdown delta = worse drawdown in proposed. Reconstruction uses statement-date weights × historical underlying-asset prices, same as Phase 1 — projection of today's hypothetical book onto historical data, not a back-test of a rebalanced path.
+</div>
+
+<h2>Headline deltas</h2>
+<div class="delta-strip"><div class="delta-card"><div class="label">Δ Sharpe (ann.)</div><div class="val"><span class="pos">+0.19</span></div><div class="sub">proposed − current</div></div><div class="delta-card"><div class="label">Δ Ann. return</div><div class="val"><span class="pos">+0.37%</span></div></div><div class="delta-card"><div class="label">Δ Ann. vol</div><div class="val"><span class="neu">-0.62%</span></div><div class="sub">↓ vol ≠ always good</div></div><div class="delta-card"><div class="label">Δ Max DD</div><div class="val"><span class="pos">+0.68%</span></div><div class="sub">+ = shallower DD</div></div><div class="delta-card"><div class="label">Δ AUM</div><div class="val"><span class="neu">0</span></div><div class="sub">book size change</div></div><div class="delta-card"><div class="label">Redundancy pairs</div><div class="val"><span class="neu">+0 / −0</span></div><div class="sub">4 persisted</div></div></div>
+
+<h2>Regime variance — by period</h2>
+<p class="footnote">
+  Aggregate Sharpe Δ averages over all periods. The per-calendar-year rows show whether the
+  scenario impact was <em>consistent across regimes</em> or driven by one favourable year.
+  Sign flips across years = the headline is masking real regime variance.
+</p>
+<style type="text/css">
+#T_30f61_row0_col3, #T_30f61_row0_col6, #T_30f61_row0_col12, #T_30f61_row1_col3, #T_30f61_row1_col6, #T_30f61_row1_col12, #T_30f61_row2_col3, #T_30f61_row2_col6, #T_30f61_row2_col12, #T_30f61_row3_col3, #T_30f61_row3_col6, #T_30f61_row3_col12, #T_30f61_row4_col3, #T_30f61_row4_col6, #T_30f61_row4_col12, #T_30f61_row5_col12, #T_30f61_row6_col3, #T_30f61_row6_col6, #T_30f61_row6_col12, #T_30f61_row7_col3, #T_30f61_row7_col6, #T_30f61_row7_col12 {
+  background-color: rgba(63, 185, 80, 0.18);
+  color: #3fb950;
+}
+#T_30f61_row5_col3, #T_30f61_row5_col6 {
+  background-color: rgba(248, 81, 73, 0.18);
+  color: #f85149;
+}
+</style>
+<table id="T_30f61" class="ds-table">
+  <thead>
+    <tr>
+      <th id="T_30f61_level0_col0" class="col_heading level0 col0" >Period</th>
+      <th id="T_30f61_level0_col1" class="col_heading level0 col1" >Cur Sharpe</th>
+      <th id="T_30f61_level0_col2" class="col_heading level0 col2" >Prop Sharpe</th>
+      <th id="T_30f61_level0_col3" class="col_heading level0 col3" >Δ Sharpe</th>
+      <th id="T_30f61_level0_col4" class="col_heading level0 col4" >Cur Ann. ret</th>
+      <th id="T_30f61_level0_col5" class="col_heading level0 col5" >Prop Ann. ret</th>
+      <th id="T_30f61_level0_col6" class="col_heading level0 col6" >Δ Ann. ret</th>
+      <th id="T_30f61_level0_col7" class="col_heading level0 col7" >Cur Vol</th>
+      <th id="T_30f61_level0_col8" class="col_heading level0 col8" >Prop Vol</th>
+      <th id="T_30f61_level0_col9" class="col_heading level0 col9" >Δ Vol</th>
+      <th id="T_30f61_level0_col10" class="col_heading level0 col10" >Cur DD</th>
+      <th id="T_30f61_level0_col11" class="col_heading level0 col11" >Prop DD</th>
+      <th id="T_30f61_level0_col12" class="col_heading level0 col12" >Δ DD</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td id="T_30f61_row0_col0" class="data row0 col0" >1M</td>
+      <td id="T_30f61_row0_col1" class="data row0 col1" >0.93</td>
+      <td id="T_30f61_row0_col2" class="data row0 col2" >1.89</td>
+      <td id="T_30f61_row0_col3" class="data row0 col3" >+0.96</td>
+      <td id="T_30f61_row0_col4" class="data row0 col4" >+3.35%</td>
+      <td id="T_30f61_row0_col5" class="data row0 col5" >+6.88%</td>
+      <td id="T_30f61_row0_col6" class="data row0 col6" >+3.53%</td>
+      <td id="T_30f61_row0_col7" class="data row0 col7" >3.62%</td>
+      <td id="T_30f61_row0_col8" class="data row0 col8" >3.55%</td>
+      <td id="T_30f61_row0_col9" class="data row0 col9" >-0.06%</td>
+      <td id="T_30f61_row0_col10" class="data row0 col10" >-0.52%</td>
+      <td id="T_30f61_row0_col11" class="data row0 col11" >-0.41%</td>
+      <td id="T_30f61_row0_col12" class="data row0 col12" >+0.11%</td>
+    </tr>
+    <tr>
+      <td id="T_30f61_row1_col0" class="data row1 col0" >3M</td>
+      <td id="T_30f61_row1_col1" class="data row1 col1" >-0.34</td>
+      <td id="T_30f61_row1_col2" class="data row1 col2" >0.29</td>
+      <td id="T_30f61_row1_col3" class="data row1 col3" >+0.62</td>
+      <td id="T_30f61_row1_col4" class="data row1 col4" >-1.74%</td>
+      <td id="T_30f61_row1_col5" class="data row1 col5" >+1.14%</td>
+      <td id="T_30f61_row1_col6" class="data row1 col6" >+2.87%</td>
+      <td id="T_30f61_row1_col7" class="data row1 col7" >4.87%</td>
+      <td id="T_30f61_row1_col8" class="data row1 col8" >4.22%</td>
+      <td id="T_30f61_row1_col9" class="data row1 col9" >-0.65%</td>
+      <td id="T_30f61_row1_col10" class="data row1 col10" >-2.11%</td>
+      <td id="T_30f61_row1_col11" class="data row1 col11" >-1.99%</td>
+      <td id="T_30f61_row1_col12" class="data row1 col12" >+0.12%</td>
+    </tr>
+    <tr>
+      <td id="T_30f61_row2_col0" class="data row2 col0" >6M</td>
+      <td id="T_30f61_row2_col1" class="data row2 col1" >-0.68</td>
+      <td id="T_30f61_row2_col2" class="data row2 col2" >0.05</td>
+      <td id="T_30f61_row2_col3" class="data row2 col3" >+0.74</td>
+      <td id="T_30f61_row2_col4" class="data row2 col4" >-2.84%</td>
+      <td id="T_30f61_row2_col5" class="data row2 col5" >+0.13%</td>
+      <td id="T_30f61_row2_col6" class="data row2 col6" >+2.97%</td>
+      <td id="T_30f61_row2_col7" class="data row2 col7" >4.10%</td>
+      <td id="T_30f61_row2_col8" class="data row2 col8" >3.44%</td>
+      <td id="T_30f61_row2_col9" class="data row2 col9" >-0.67%</td>
+      <td id="T_30f61_row2_col10" class="data row2 col10" >-3.85%</td>
+      <td id="T_30f61_row2_col11" class="data row2 col11" >-2.74%</td>
+      <td id="T_30f61_row2_col12" class="data row2 col12" >+1.12%</td>
+    </tr>
+    <tr>
+      <td id="T_30f61_row3_col0" class="data row3 col0" >1Y</td>
+      <td id="T_30f61_row3_col1" class="data row3 col1" >0.01</td>
+      <td id="T_30f61_row3_col2" class="data row3 col2" >0.29</td>
+      <td id="T_30f61_row3_col3" class="data row3 col3" >+0.28</td>
+      <td id="T_30f61_row3_col4" class="data row3 col4" >-0.05%</td>
+      <td id="T_30f61_row3_col5" class="data row3 col5" >+1.06%</td>
+      <td id="T_30f61_row3_col6" class="data row3 col6" >+1.11%</td>
+      <td id="T_30f61_row3_col7" class="data row3 col7" >4.46%</td>
+      <td id="T_30f61_row3_col8" class="data row3 col8" >3.88%</td>
+      <td id="T_30f61_row3_col9" class="data row3 col9" >-0.59%</td>
+      <td id="T_30f61_row3_col10" class="data row3 col10" >-3.85%</td>
+      <td id="T_30f61_row3_col11" class="data row3 col11" >-3.17%</td>
+      <td id="T_30f61_row3_col12" class="data row3 col12" >+0.68%</td>
+    </tr>
+    <tr>
+      <td id="T_30f61_row4_col0" class="data row4 col0" >All</td>
+      <td id="T_30f61_row4_col1" class="data row4 col1" >0.64</td>
+      <td id="T_30f61_row4_col2" class="data row4 col2" >0.82</td>
+      <td id="T_30f61_row4_col3" class="data row4 col3" >+0.19</td>
+      <td id="T_30f61_row4_col4" class="data row4 col4" >+2.80%</td>
+      <td id="T_30f61_row4_col5" class="data row4 col5" >+3.17%</td>
+      <td id="T_30f61_row4_col6" class="data row4 col6" >+0.37%</td>
+      <td id="T_30f61_row4_col7" class="data row4 col7" >4.49%</td>
+      <td id="T_30f61_row4_col8" class="data row4 col8" >3.88%</td>
+      <td id="T_30f61_row4_col9" class="data row4 col9" >-0.62%</td>
+      <td id="T_30f61_row4_col10" class="data row4 col10" >-3.85%</td>
+      <td id="T_30f61_row4_col11" class="data row4 col11" >-3.17%</td>
+      <td id="T_30f61_row4_col12" class="data row4 col12" >+0.68%</td>
+    </tr>
+    <tr>
+      <td id="T_30f61_row5_col0" class="data row5 col0" >2024 (partial)</td>
+      <td id="T_30f61_row5_col1" class="data row5 col1" >4.71</td>
+      <td id="T_30f61_row5_col2" class="data row5 col2" >4.10</td>
+      <td id="T_30f61_row5_col3" class="data row5 col3" >-0.61</td>
+      <td id="T_30f61_row5_col4" class="data row5 col4" >+22.94%</td>
+      <td id="T_30f61_row5_col5" class="data row5 col5" >+16.50%</td>
+      <td id="T_30f61_row5_col6" class="data row5 col6" >-6.43%</td>
+      <td id="T_30f61_row5_col7" class="data row5 col7" >4.40%</td>
+      <td id="T_30f61_row5_col8" class="data row5 col8" >3.74%</td>
+      <td id="T_30f61_row5_col9" class="data row5 col9" >-0.66%</td>
+      <td id="T_30f61_row5_col10" class="data row5 col10" >-0.77%</td>
+      <td id="T_30f61_row5_col11" class="data row5 col11" >-0.62%</td>
+      <td id="T_30f61_row5_col12" class="data row5 col12" >+0.15%</td>
+    </tr>
+    <tr>
+      <td id="T_30f61_row6_col0" class="data row6 col0" >2025</td>
+      <td id="T_30f61_row6_col1" class="data row6 col1" >0.17</td>
+      <td id="T_30f61_row6_col2" class="data row6 col2" >0.32</td>
+      <td id="T_30f61_row6_col3" class="data row6 col3" >+0.16</td>
+      <td id="T_30f61_row6_col4" class="data row6 col4" >+0.64%</td>
+      <td id="T_30f61_row6_col5" class="data row6 col5" >+1.19%</td>
+      <td id="T_30f61_row6_col6" class="data row6 col6" >+0.55%</td>
+      <td id="T_30f61_row6_col7" class="data row6 col7" >4.48%</td>
+      <td id="T_30f61_row6_col8" class="data row6 col8" >3.88%</td>
+      <td id="T_30f61_row6_col9" class="data row6 col9" >-0.60%</td>
+      <td id="T_30f61_row6_col10" class="data row6 col10" >-3.28%</td>
+      <td id="T_30f61_row6_col11" class="data row6 col11" >-3.17%</td>
+      <td id="T_30f61_row6_col12" class="data row6 col12" >+0.11%</td>
+    </tr>
+    <tr>
+      <td id="T_30f61_row7_col0" class="data row7 col0" >2026 (partial)</td>
+      <td id="T_30f61_row7_col1" class="data row7 col1" >0.21</td>
+      <td id="T_30f61_row7_col2" class="data row7 col2" >0.79</td>
+      <td id="T_30f61_row7_col3" class="data row7 col3" >+0.58</td>
+      <td id="T_30f61_row7_col4" class="data row7 col4" >+0.86%</td>
+      <td id="T_30f61_row7_col5" class="data row7 col5" >+3.10%</td>
+      <td id="T_30f61_row7_col6" class="data row7 col6" >+2.24%</td>
+      <td id="T_30f61_row7_col7" class="data row7 col7" >4.56%</td>
+      <td id="T_30f61_row7_col8" class="data row7 col8" >3.94%</td>
+      <td id="T_30f61_row7_col9" class="data row7 col9" >-0.62%</td>
+      <td id="T_30f61_row7_col10" class="data row7 col10" >-2.23%</td>
+      <td id="T_30f61_row7_col11" class="data row7 col11" >-1.99%</td>
+      <td id="T_30f61_row7_col12" class="data row7 col12" >+0.24%</td>
+    </tr>
+  </tbody>
+</table>
+
+
+<h2>Tail-risk sanity — best & worst rolling N-day stretches</h2>
+<p class="footnote">
+  Rolling window scan across the full sample. <strong>Δ worst &gt; 0</strong> = proposed has a
+  less-bad worst stretch (better tail protection); <strong>Δ best &gt; 0</strong> = proposed has
+  a better upside stretch. Dates show when each extreme was hit. A scenario that improves
+  Δ worst more than it costs Δ best is winning on asymmetric risk.
+</p>
+<style type="text/css">
+#T_7a707_row0_col5, #T_7a707_row1_col5, #T_7a707_row3_col5 {
+  background-color: rgba(248, 81, 73, 0.18);
+  color: #f85149;
+}
+#T_7a707_row0_col10, #T_7a707_row1_col10, #T_7a707_row2_col5, #T_7a707_row2_col10, #T_7a707_row3_col10 {
+  background-color: rgba(63, 185, 80, 0.18);
+  color: #3fb950;
+}
+</style>
+<table id="T_7a707" class="ds-table">
+  <thead>
+    <tr>
+      <th id="T_7a707_level0_col0" class="col_heading level0 col0" >Window</th>
+      <th id="T_7a707_level0_col1" class="col_heading level0 col1" >Cur best</th>
+      <th id="T_7a707_level0_col2" class="col_heading level0 col2" >Cur best on</th>
+      <th id="T_7a707_level0_col3" class="col_heading level0 col3" >Prop best</th>
+      <th id="T_7a707_level0_col4" class="col_heading level0 col4" >Prop best on</th>
+      <th id="T_7a707_level0_col5" class="col_heading level0 col5" >Δ best</th>
+      <th id="T_7a707_level0_col6" class="col_heading level0 col6" >Cur worst</th>
+      <th id="T_7a707_level0_col7" class="col_heading level0 col7" >Cur worst on</th>
+      <th id="T_7a707_level0_col8" class="col_heading level0 col8" >Prop worst</th>
+      <th id="T_7a707_level0_col9" class="col_heading level0 col9" >Prop worst on</th>
+      <th id="T_7a707_level0_col10" class="col_heading level0 col10" >Δ worst</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td id="T_7a707_row0_col0" class="data row0 col0" >1M</td>
+      <td id="T_7a707_row0_col1" class="data row0 col1" >+2.66%</td>
+      <td id="T_7a707_row0_col2" class="data row0 col2" >2024-12-11</td>
+      <td id="T_7a707_row0_col3" class="data row0 col3" >+2.29%</td>
+      <td id="T_7a707_row0_col4" class="data row0 col4" >2025-05-20</td>
+      <td id="T_7a707_row0_col5" class="data row0 col5" >-0.37%</td>
+      <td id="T_7a707_row0_col6" class="data row0 col6" >-2.49%</td>
+      <td id="T_7a707_row0_col7" class="data row0 col7" >2025-11-14</td>
+      <td id="T_7a707_row0_col8" class="data row0 col8" >-2.17%</td>
+      <td id="T_7a707_row0_col9" class="data row0 col9" >2025-04-08</td>
+      <td id="T_7a707_row0_col10" class="data row0 col10" >+0.32%</td>
+    </tr>
+    <tr>
+      <td id="T_7a707_row1_col0" class="data row1 col0" >3M</td>
+      <td id="T_7a707_row1_col1" class="data row1 col1" >+3.50%</td>
+      <td id="T_7a707_row1_col2" class="data row1 col2" >2025-10-02</td>
+      <td id="T_7a707_row1_col3" class="data row1 col3" >+2.97%</td>
+      <td id="T_7a707_row1_col4" class="data row1 col4" >2025-10-03</td>
+      <td id="T_7a707_row1_col5" class="data row1 col5" >-0.53%</td>
+      <td id="T_7a707_row1_col6" class="data row1 col6" >-3.27%</td>
+      <td id="T_7a707_row1_col7" class="data row1 col7" >2026-02-05</td>
+      <td id="T_7a707_row1_col8" class="data row1 col8" >-2.01%</td>
+      <td id="T_7a707_row1_col9" class="data row1 col9" >2025-04-04</td>
+      <td id="T_7a707_row1_col10" class="data row1 col10" >+1.27%</td>
+    </tr>
+    <tr>
+      <td id="T_7a707_row2_col0" class="data row2 col0" >6M</td>
+      <td id="T_7a707_row2_col1" class="data row2 col1" >+3.20%</td>
+      <td id="T_7a707_row2_col2" class="data row2 col2" >2025-12-04</td>
+      <td id="T_7a707_row2_col3" class="data row2 col3" >+3.37%</td>
+      <td id="T_7a707_row2_col4" class="data row2 col4" >2025-12-04</td>
+      <td id="T_7a707_row2_col5" class="data row2 col5" >+0.17%</td>
+      <td id="T_7a707_row2_col6" class="data row2 col6" >-2.00%</td>
+      <td id="T_7a707_row2_col7" class="data row2 col7" >2026-03-27</td>
+      <td id="T_7a707_row2_col8" class="data row2 col8" >-0.98%</td>
+      <td id="T_7a707_row2_col9" class="data row2 col9" >2026-03-27</td>
+      <td id="T_7a707_row2_col10" class="data row2 col10" >+1.01%</td>
+    </tr>
+    <tr>
+      <td id="T_7a707_row3_col0" class="data row3 col0" >1Y</td>
+      <td id="T_7a707_row3_col1" class="data row3 col1" >+2.88%</td>
+      <td id="T_7a707_row3_col2" class="data row3 col2" >2026-03-17</td>
+      <td id="T_7a707_row3_col3" class="data row3 col3" >+2.73%</td>
+      <td id="T_7a707_row3_col4" class="data row3 col4" >2026-03-17</td>
+      <td id="T_7a707_row3_col5" class="data row3 col5" >-0.15%</td>
+      <td id="T_7a707_row3_col6" class="data row3 col6" >-0.06%</td>
+      <td id="T_7a707_row3_col7" class="data row3 col7" >2026-03-27</td>
+      <td id="T_7a707_row3_col8" class="data row3 col8" >+0.25%</td>
+      <td id="T_7a707_row3_col9" class="data row3 col9" >2026-03-24</td>
+      <td id="T_7a707_row3_col10" class="data row3 col10" >+0.31%</td>
+    </tr>
+  </tbody>
+</table>
+
+
+<h2>Per-portfolio shifts</h2>
+<p class="footnote">
+  For each portfolio present in both books, the change in Sharpe / vol / max DD between current and proposed.
+  (The headline "Combined book" row is excluded — that's the aggregation, not a comparable sleeve.)
+</p>
+<style type="text/css">
+</style>
+<table id="T_29918" class="ds-table">
+  <thead>
+    <tr>
+      <th id="T_29918_level0_col0" class="col_heading level0 col0" >Portfolio</th>
+      <th id="T_29918_level0_col1" class="col_heading level0 col1" >Δ Sharpe</th>
+      <th id="T_29918_level0_col2" class="col_heading level0 col2" >Δ Vol</th>
+      <th id="T_29918_level0_col3" class="col_heading level0 col3" >Δ Max DD</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td id="T_29918_row0_col0" class="data row0 col0" >BlackRock</td>
+      <td id="T_29918_row0_col1" class="data row0 col1" >+0.00</td>
+      <td id="T_29918_row0_col2" class="data row0 col2" >+0.00%</td>
+      <td id="T_29918_row0_col3" class="data row0 col3" >+0.00%</td>
+    </tr>
+    <tr>
+      <td id="T_29918_row1_col0" class="data row1 col0" >Energy</td>
+      <td id="T_29918_row1_col1" class="data row1 col1" >+0.00</td>
+      <td id="T_29918_row1_col2" class="data row1 col2" >+0.00%</td>
+      <td id="T_29918_row1_col3" class="data row1 col3" >+0.00%</td>
+    </tr>
+    <tr>
+      <td id="T_29918_row2_col0" class="data row2 col0" >Ex-US Large-cap</td>
+      <td id="T_29918_row2_col1" class="data row2 col1" >+0.00</td>
+      <td id="T_29918_row2_col2" class="data row2 col2" >+0.00%</td>
+      <td id="T_29918_row2_col3" class="data row2 col3" >+0.00%</td>
+    </tr>
+    <tr>
+      <td id="T_29918_row3_col0" class="data row3 col0" >General Investing</td>
+      <td id="T_29918_row3_col1" class="data row3 col1" >+0.00</td>
+      <td id="T_29918_row3_col2" class="data row3 col2" >+0.00%</td>
+      <td id="T_29918_row3_col3" class="data row3 col3" >+0.00%</td>
+    </tr>
+    <tr>
+      <td id="T_29918_row4_col0" class="data row4 col0" >General SRS</td>
+      <td id="T_29918_row4_col1" class="data row4 col1" >+0.00</td>
+      <td id="T_29918_row4_col2" class="data row4 col2" >+0.00%</td>
+      <td id="T_29918_row4_col3" class="data row4 col3" >+0.00%</td>
+    </tr>
+    <tr>
+      <td id="T_29918_row5_col0" class="data row5 col0" >Guitsa</td>
+      <td id="T_29918_row5_col1" class="data row5 col1" >+0.00</td>
+      <td id="T_29918_row5_col2" class="data row5 col2" >+0.00%</td>
+      <td id="T_29918_row5_col3" class="data row5 col3" >+0.00%</td>
+    </tr>
+    <tr>
+      <td id="T_29918_row6_col0" class="data row6 col0" >High Dividend Yield</td>
+      <td id="T_29918_row6_col1" class="data row6 col1" >+0.00</td>
+      <td id="T_29918_row6_col2" class="data row6 col2" >+0.00%</td>
+      <td id="T_29918_row6_col3" class="data row6 col3" >+0.00%</td>
+    </tr>
+    <tr>
+      <td id="T_29918_row7_col0" class="data row7 col0" >Income Investing</td>
+      <td id="T_29918_row7_col1" class="data row7 col1" >+0.00</td>
+      <td id="T_29918_row7_col2" class="data row7 col2" >+0.00%</td>
+      <td id="T_29918_row7_col3" class="data row7 col3" >+0.00%</td>
+    </tr>
+    <tr>
+      <td id="T_29918_row8_col0" class="data row8 col0" >Nasdaq Covered Call</td>
+      <td id="T_29918_row8_col1" class="data row8 col1" >+0.00</td>
+      <td id="T_29918_row8_col2" class="data row8 col2" >+0.00%</td>
+      <td id="T_29918_row8_col3" class="data row8 col3" >+0.00%</td>
+    </tr>
+    <tr>
+      <td id="T_29918_row9_col0" class="data row9 col0" >SG ETF</td>
+      <td id="T_29918_row9_col1" class="data row9 col1" >+0.00</td>
+      <td id="T_29918_row9_col2" class="data row9 col2" >+0.00%</td>
+      <td id="T_29918_row9_col3" class="data row9 col3" >+0.00%</td>
+    </tr>
+    <tr>
+      <td id="T_29918_row10_col0" class="data row10 col0" >Simple SGD</td>
+      <td id="T_29918_row10_col1" class="data row10 col1" >+0.00</td>
+      <td id="T_29918_row10_col2" class="data row10 col2" >+0.00%</td>
+      <td id="T_29918_row10_col3" class="data row10 col3" >+0.00%</td>
+    </tr>
+    <tr>
+      <td id="T_29918_row11_col0" class="data row11 col0" >Simple USD</td>
+      <td id="T_29918_row11_col1" class="data row11 col1" >+0.00</td>
+      <td id="T_29918_row11_col2" class="data row11 col2" >+0.00%</td>
+      <td id="T_29918_row11_col3" class="data row11 col3" >+0.00%</td>
+    </tr>
+    <tr>
+      <td id="T_29918_row12_col0" class="data row12 col0" >Singapore Investing</td>
+      <td id="T_29918_row12_col1" class="data row12 col1" >+0.00</td>
+      <td id="T_29918_row12_col2" class="data row12 col2" >+0.00%</td>
+      <td id="T_29918_row12_col3" class="data row12 col3" >+0.00%</td>
+    </tr>
+    <tr>
+      <td id="T_29918_row13_col0" class="data row13 col0" >Utilities</td>
+      <td id="T_29918_row13_col1" class="data row13 col1" >+0.00</td>
+      <td id="T_29918_row13_col2" class="data row13 col2" >+0.00%</td>
+      <td id="T_29918_row13_col3" class="data row13 col3" >+0.00%</td>
+    </tr>
+  </tbody>
+</table>
+
+
+<h2>Exposure shift</h2>
+<p class="footnote">
+  Per dimension, how the bucket weights and dollar values shift. Sorted by absolute weight shift, biggest movers first.
+</p>
+<div class="three-col">
+  <div><h3>Asset Class</h3><style type="text/css">
+#T_c2da1_row0_col3, #T_c2da1_row0_col6 {
+  background-color: rgba(248, 81, 73, 0.18);
+  color: #f85149;
+}
+#T_c2da1_row1_col3, #T_c2da1_row1_col6, #T_c2da1_row2_col3, #T_c2da1_row2_col6, #T_c2da1_row3_col3, #T_c2da1_row3_col6, #T_c2da1_row4_col3, #T_c2da1_row4_col6 {
+  background-color: rgba(63, 185, 80, 0.18);
+  color: #3fb950;
+}
+</style>
+<table id="T_c2da1" class="ds-table">
+  <thead>
+    <tr>
+      <th id="T_c2da1_level0_col0" class="col_heading level0 col0" >Bucket</th>
+      <th id="T_c2da1_level0_col1" class="col_heading level0 col1" >Cur wt</th>
+      <th id="T_c2da1_level0_col2" class="col_heading level0 col2" >Prop wt</th>
+      <th id="T_c2da1_level0_col3" class="col_heading level0 col3" >Δ wt</th>
+      <th id="T_c2da1_level0_col4" class="col_heading level0 col4" >Cur $</th>
+      <th id="T_c2da1_level0_col5" class="col_heading level0 col5" >Prop $</th>
+      <th id="T_c2da1_level0_col6" class="col_heading level0 col6" >Δ $</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td id="T_c2da1_row0_col0" class="data row0 col0" >Crypto</td>
+      <td id="T_c2da1_row0_col1" class="data row0 col1" >3.64%</td>
+      <td id="T_c2da1_row0_col2" class="data row0 col2" >1.80%</td>
+      <td id="T_c2da1_row0_col3" class="data row0 col3" >-1.84%</td>
+      <td id="T_c2da1_row0_col4" class="data row0 col4" >107.4K</td>
+      <td id="T_c2da1_row0_col5" class="data row0 col5" >53.2K</td>
+      <td id="T_c2da1_row0_col6" class="data row0 col6" >-54.3K</td>
+    </tr>
+    <tr>
+      <td id="T_c2da1_row1_col0" class="data row1 col0" >Equity</td>
+      <td id="T_c2da1_row1_col1" class="data row1 col1" >16.59%</td>
+      <td id="T_c2da1_row1_col2" class="data row1 col2" >18.02%</td>
+      <td id="T_c2da1_row1_col3" class="data row1 col3" >+1.43%</td>
+      <td id="T_c2da1_row1_col4" class="data row1 col4" >489.8K</td>
+      <td id="T_c2da1_row1_col5" class="data row1 col5" >532.1K</td>
+      <td id="T_c2da1_row1_col6" class="data row1 col6" >+42.3K</td>
+    </tr>
+    <tr>
+      <td id="T_c2da1_row2_col0" class="data row2 col0" >Bond</td>
+      <td id="T_c2da1_row2_col1" class="data row2 col1" >0.75%</td>
+      <td id="T_c2da1_row2_col2" class="data row2 col2" >1.01%</td>
+      <td id="T_c2da1_row2_col3" class="data row2 col3" >+0.26%</td>
+      <td id="T_c2da1_row2_col4" class="data row2 col4" >22.1K</td>
+      <td id="T_c2da1_row2_col5" class="data row2 col5" >29.8K</td>
+      <td id="T_c2da1_row2_col6" class="data row2 col6" >+7.7K</td>
+    </tr>
+    <tr>
+      <td id="T_c2da1_row3_col0" class="data row3 col0" >Cash</td>
+      <td id="T_c2da1_row3_col1" class="data row3 col1" >78.14%</td>
+      <td id="T_c2da1_row3_col2" class="data row3 col2" >78.23%</td>
+      <td id="T_c2da1_row3_col3" class="data row3 col3" >+0.10%</td>
+      <td id="T_c2da1_row3_col4" class="data row3 col4" >2.31M</td>
+      <td id="T_c2da1_row3_col5" class="data row3 col5" >2.31M</td>
+      <td id="T_c2da1_row3_col6" class="data row3 col6" >+2.9K</td>
+    </tr>
+    <tr>
+      <td id="T_c2da1_row4_col0" class="data row4 col0" >Commodity</td>
+      <td id="T_c2da1_row4_col1" class="data row4 col1" >0.89%</td>
+      <td id="T_c2da1_row4_col2" class="data row4 col2" >0.93%</td>
+      <td id="T_c2da1_row4_col3" class="data row4 col3" >+0.05%</td>
+      <td id="T_c2da1_row4_col4" class="data row4 col4" >26.2K</td>
+      <td id="T_c2da1_row4_col5" class="data row4 col5" >27.6K</td>
+      <td id="T_c2da1_row4_col6" class="data row4 col6" >+1.4K</td>
+    </tr>
+  </tbody>
+</table>
+</div><div><h3>Region</h3><style type="text/css">
+#T_dba29_row0_col3, #T_dba29_row0_col6, #T_dba29_row9_col3, #T_dba29_row9_col6 {
+  background-color: rgba(248, 81, 73, 0.18);
+  color: #f85149;
+}
+#T_dba29_row1_col3, #T_dba29_row1_col6, #T_dba29_row2_col3, #T_dba29_row2_col6, #T_dba29_row3_col3, #T_dba29_row3_col6, #T_dba29_row4_col3, #T_dba29_row4_col6, #T_dba29_row5_col3, #T_dba29_row5_col6, #T_dba29_row6_col3, #T_dba29_row6_col6, #T_dba29_row7_col3, #T_dba29_row7_col6, #T_dba29_row8_col3, #T_dba29_row8_col6, #T_dba29_row10_col3, #T_dba29_row10_col6 {
+  background-color: rgba(63, 185, 80, 0.18);
+  color: #3fb950;
+}
+</style>
+<table id="T_dba29" class="ds-table">
+  <thead>
+    <tr>
+      <th id="T_dba29_level0_col0" class="col_heading level0 col0" >Bucket</th>
+      <th id="T_dba29_level0_col1" class="col_heading level0 col1" >Cur wt</th>
+      <th id="T_dba29_level0_col2" class="col_heading level0 col2" >Prop wt</th>
+      <th id="T_dba29_level0_col3" class="col_heading level0 col3" >Δ wt</th>
+      <th id="T_dba29_level0_col4" class="col_heading level0 col4" >Cur $</th>
+      <th id="T_dba29_level0_col5" class="col_heading level0 col5" >Prop $</th>
+      <th id="T_dba29_level0_col6" class="col_heading level0 col6" >Δ $</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td id="T_dba29_row0_col0" class="data row0 col0" >Global</td>
+      <td id="T_dba29_row0_col1" class="data row0 col1" >7.32%</td>
+      <td id="T_dba29_row0_col2" class="data row0 col2" >5.62%</td>
+      <td id="T_dba29_row0_col3" class="data row0 col3" >-1.70%</td>
+      <td id="T_dba29_row0_col4" class="data row0 col4" >216.1K</td>
+      <td id="T_dba29_row0_col5" class="data row0 col5" >165.9K</td>
+      <td id="T_dba29_row0_col6" class="data row0 col6" >-50.3K</td>
+    </tr>
+    <tr>
+      <td id="T_dba29_row1_col0" class="data row1 col0" >US</td>
+      <td id="T_dba29_row1_col1" class="data row1 col1" >18.32%</td>
+      <td id="T_dba29_row1_col2" class="data row1 col2" >19.54%</td>
+      <td id="T_dba29_row1_col3" class="data row1 col3" >+1.22%</td>
+      <td id="T_dba29_row1_col4" class="data row1 col4" >540.9K</td>
+      <td id="T_dba29_row1_col5" class="data row1 col5" >576.9K</td>
+      <td id="T_dba29_row1_col6" class="data row1 col6" >+36.0K</td>
+    </tr>
+    <tr>
+      <td id="T_dba29_row2_col0" class="data row2 col0" >Emerging Markets ex-China</td>
+      <td id="T_dba29_row2_col1" class="data row2 col1" >0.11%</td>
+      <td id="T_dba29_row2_col2" class="data row2 col2" >0.26%</td>
+      <td id="T_dba29_row2_col3" class="data row2 col3" >+0.15%</td>
+      <td id="T_dba29_row2_col4" class="data row2 col4" >3.3K</td>
+      <td id="T_dba29_row2_col5" class="data row2 col5" >7.8K</td>
+      <td id="T_dba29_row2_col6" class="data row2 col6" >+4.6K</td>
+    </tr>
+    <tr>
+      <td id="T_dba29_row3_col0" class="data row3 col0" >Eurozone</td>
+      <td id="T_dba29_row3_col1" class="data row3 col1" >0.07%</td>
+      <td id="T_dba29_row3_col2" class="data row3 col2" >0.17%</td>
+      <td id="T_dba29_row3_col3" class="data row3 col3" >+0.10%</td>
+      <td id="T_dba29_row3_col4" class="data row3 col4" >2.1K</td>
+      <td id="T_dba29_row3_col5" class="data row3 col5" >5.0K</td>
+      <td id="T_dba29_row3_col6" class="data row3 col6" >+2.9K</td>
+    </tr>
+    <tr>
+      <td id="T_dba29_row4_col0" class="data row4 col0" >Japan</td>
+      <td id="T_dba29_row4_col1" class="data row4 col1" >1.05%</td>
+      <td id="T_dba29_row4_col2" class="data row4 col2" >1.14%</td>
+      <td id="T_dba29_row4_col3" class="data row4 col3" >+0.09%</td>
+      <td id="T_dba29_row4_col4" class="data row4 col4" >31.1K</td>
+      <td id="T_dba29_row4_col5" class="data row4 col5" >33.8K</td>
+      <td id="T_dba29_row4_col6" class="data row4 col6" >+2.6K</td>
+    </tr>
+    <tr>
+      <td id="T_dba29_row5_col0" class="data row5 col0" >Canada</td>
+      <td id="T_dba29_row5_col1" class="data row5 col1" >0.04%</td>
+      <td id="T_dba29_row5_col2" class="data row5 col2" >0.10%</td>
+      <td id="T_dba29_row5_col3" class="data row5 col3" >+0.06%</td>
+      <td id="T_dba29_row5_col4" class="data row5 col4" >1.2K</td>
+      <td id="T_dba29_row5_col5" class="data row5 col5" >2.9K</td>
+      <td id="T_dba29_row5_col6" class="data row5 col6" >+1.7K</td>
+    </tr>
+    <tr>
+      <td id="T_dba29_row6_col0" class="data row6 col0" >China</td>
+      <td id="T_dba29_row6_col1" class="data row6 col1" >0.03%</td>
+      <td id="T_dba29_row6_col2" class="data row6 col2" >0.08%</td>
+      <td id="T_dba29_row6_col3" class="data row6 col3" >+0.05%</td>
+      <td id="T_dba29_row6_col4" class="data row6 col4" >1.0K</td>
+      <td id="T_dba29_row6_col5" class="data row6 col5" >2.4K</td>
+      <td id="T_dba29_row6_col6" class="data row6 col6" >+1.4K</td>
+    </tr>
+    <tr>
+      <td id="T_dba29_row7_col0" class="data row7 col0" >UK</td>
+      <td id="T_dba29_row7_col1" class="data row7 col1" >0.01%</td>
+      <td id="T_dba29_row7_col2" class="data row7 col2" >0.03%</td>
+      <td id="T_dba29_row7_col3" class="data row7 col3" >+0.02%</td>
+      <td id="T_dba29_row7_col4" class="data row7 col4" >414</td>
+      <td id="T_dba29_row7_col5" class="data row7 col5" >993</td>
+      <td id="T_dba29_row7_col6" class="data row7 col6" >+579</td>
+    </tr>
+    <tr>
+      <td id="T_dba29_row8_col0" class="data row8 col0" >Pacific ex-Japan</td>
+      <td id="T_dba29_row8_col1" class="data row8 col1" >0.01%</td>
+      <td id="T_dba29_row8_col2" class="data row8 col2" >0.03%</td>
+      <td id="T_dba29_row8_col3" class="data row8 col3" >+0.02%</td>
+      <td id="T_dba29_row8_col4" class="data row8 col4" >411</td>
+      <td id="T_dba29_row8_col5" class="data row8 col5" >986</td>
+      <td id="T_dba29_row8_col6" class="data row8 col6" >+575</td>
+    </tr>
+    <tr>
+      <td id="T_dba29_row9_col0" class="data row9 col0" >Singapore</td>
+      <td id="T_dba29_row9_col1" class="data row9 col1" >69.43%</td>
+      <td id="T_dba29_row9_col2" class="data row9 col2" >69.41%</td>
+      <td id="T_dba29_row9_col3" class="data row9 col3" >-0.02%</td>
+      <td id="T_dba29_row9_col4" class="data row9 col4" >2.05M</td>
+      <td id="T_dba29_row9_col5" class="data row9 col5" >2.05M</td>
+      <td id="T_dba29_row9_col6" class="data row9 col6" >-545</td>
+    </tr>
+    <tr>
+      <td id="T_dba29_row10_col0" class="data row10 col0" >Emerging Markets</td>
+      <td id="T_dba29_row10_col1" class="data row10 col1" >0.69%</td>
+      <td id="T_dba29_row10_col2" class="data row10 col2" >0.70%</td>
+      <td id="T_dba29_row10_col3" class="data row10 col3" >+0.01%</td>
+      <td id="T_dba29_row10_col4" class="data row10 col4" >20.3K</td>
+      <td id="T_dba29_row10_col5" class="data row10 col5" >20.7K</td>
+      <td id="T_dba29_row10_col6" class="data row10 col6" >+423</td>
+    </tr>
+    <tr>
+      <td id="T_dba29_row11_col0" class="data row11 col0" >Asia ex-Japan</td>
+      <td id="T_dba29_row11_col1" class="data row11 col1" >0.19%</td>
+      <td id="T_dba29_row11_col2" class="data row11 col2" >0.19%</td>
+      <td id="T_dba29_row11_col3" class="data row11 col3" >+0.00%</td>
+      <td id="T_dba29_row11_col4" class="data row11 col4" >5.6K</td>
+      <td id="T_dba29_row11_col5" class="data row11 col5" >5.6K</td>
+      <td id="T_dba29_row11_col6" class="data row11 col6" >0</td>
+    </tr>
+    <tr>
+      <td id="T_dba29_row12_col0" class="data row12 col0" >Developed ex-US</td>
+      <td id="T_dba29_row12_col1" class="data row12 col1" >2.32%</td>
+      <td id="T_dba29_row12_col2" class="data row12 col2" >2.32%</td>
+      <td id="T_dba29_row12_col3" class="data row12 col3" >+0.00%</td>
+      <td id="T_dba29_row12_col4" class="data row12 col4" >68.5K</td>
+      <td id="T_dba29_row12_col5" class="data row12 col5" >68.5K</td>
+      <td id="T_dba29_row12_col6" class="data row12 col6" >0</td>
+    </tr>
+    <tr>
+      <td id="T_dba29_row13_col0" class="data row13 col0" >India</td>
+      <td id="T_dba29_row13_col1" class="data row13 col1" >0.40%</td>
+      <td id="T_dba29_row13_col2" class="data row13 col2" >0.40%</td>
+      <td id="T_dba29_row13_col3" class="data row13 col3" >+0.00%</td>
+      <td id="T_dba29_row13_col4" class="data row13 col4" >11.9K</td>
+      <td id="T_dba29_row13_col5" class="data row13 col5" >11.9K</td>
+      <td id="T_dba29_row13_col6" class="data row13 col6" >0</td>
+    </tr>
+  </tbody>
+</table>
+</div><div><h3>Sector</h3><style type="text/css">
+#T_db9ef_row0_col3, #T_db9ef_row0_col6, #T_db9ef_row2_col3, #T_db9ef_row2_col6 {
+  background-color: rgba(248, 81, 73, 0.18);
+  color: #f85149;
+}
+#T_db9ef_row1_col3, #T_db9ef_row1_col6, #T_db9ef_row3_col3, #T_db9ef_row3_col6, #T_db9ef_row4_col3, #T_db9ef_row4_col6, #T_db9ef_row5_col3, #T_db9ef_row5_col6, #T_db9ef_row6_col3, #T_db9ef_row6_col6, #T_db9ef_row7_col3, #T_db9ef_row7_col6, #T_db9ef_row8_col3, #T_db9ef_row8_col6, #T_db9ef_row9_col3, #T_db9ef_row9_col6, #T_db9ef_row10_col3, #T_db9ef_row10_col6, #T_db9ef_row11_col3, #T_db9ef_row11_col6, #T_db9ef_row12_col3, #T_db9ef_row12_col6, #T_db9ef_row13_col3, #T_db9ef_row13_col6, #T_db9ef_row14_col3, #T_db9ef_row14_col6, #T_db9ef_row15_col3, #T_db9ef_row15_col6, #T_db9ef_row16_col3, #T_db9ef_row16_col6 {
+  background-color: rgba(63, 185, 80, 0.18);
+  color: #3fb950;
+}
+</style>
+<table id="T_db9ef" class="ds-table">
+  <thead>
+    <tr>
+      <th id="T_db9ef_level0_col0" class="col_heading level0 col0" >Bucket</th>
+      <th id="T_db9ef_level0_col1" class="col_heading level0 col1" >Cur wt</th>
+      <th id="T_db9ef_level0_col2" class="col_heading level0 col2" >Prop wt</th>
+      <th id="T_db9ef_level0_col3" class="col_heading level0 col3" >Δ wt</th>
+      <th id="T_db9ef_level0_col4" class="col_heading level0 col4" >Cur $</th>
+      <th id="T_db9ef_level0_col5" class="col_heading level0 col5" >Prop $</th>
+      <th id="T_db9ef_level0_col6" class="col_heading level0 col6" >Δ $</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td id="T_db9ef_row0_col0" class="data row0 col0" >Bitcoin (proxy: BTC-USD spot)</td>
+      <td id="T_db9ef_row0_col1" class="data row0 col1" >1.86%</td>
+      <td id="T_db9ef_row0_col2" class="data row0 col2" >0.92%</td>
+      <td id="T_db9ef_row0_col3" class="data row0 col3" >-0.94%</td>
+      <td id="T_db9ef_row0_col4" class="data row0 col4" >54.8K</td>
+      <td id="T_db9ef_row0_col5" class="data row0 col5" >27.1K</td>
+      <td id="T_db9ef_row0_col6" class="data row0 col6" >-27.7K</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row1_col0" class="data row1 col0" >Broad Market</td>
+      <td id="T_db9ef_row1_col1" class="data row1 col1" >10.26%</td>
+      <td id="T_db9ef_row1_col2" class="data row1 col2" >11.16%</td>
+      <td id="T_db9ef_row1_col3" class="data row1 col3" >+0.90%</td>
+      <td id="T_db9ef_row1_col4" class="data row1 col4" >302.9K</td>
+      <td id="T_db9ef_row1_col5" class="data row1 col5" >329.5K</td>
+      <td id="T_db9ef_row1_col6" class="data row1 col6" >+26.6K</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row2_col0" class="data row2 col0" >Ethereum (proxy: ETH-USD spot)</td>
+      <td id="T_db9ef_row2_col1" class="data row2 col1" >1.78%</td>
+      <td id="T_db9ef_row2_col2" class="data row2 col2" >0.89%</td>
+      <td id="T_db9ef_row2_col3" class="data row2 col3" >-0.90%</td>
+      <td id="T_db9ef_row2_col4" class="data row2 col4" >52.7K</td>
+      <td id="T_db9ef_row2_col5" class="data row2 col5" >26.1K</td>
+      <td id="T_db9ef_row2_col6" class="data row2 col6" >-26.5K</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row3_col0" class="data row3 col0" >ESG Screened</td>
+      <td id="T_db9ef_row3_col1" class="data row3 col1" >0.14%</td>
+      <td id="T_db9ef_row3_col2" class="data row3 col2" >0.34%</td>
+      <td id="T_db9ef_row3_col3" class="data row3 col3" >+0.20%</td>
+      <td id="T_db9ef_row3_col4" class="data row3 col4" >4.2K</td>
+      <td id="T_db9ef_row3_col5" class="data row3 col5" >10.0K</td>
+      <td id="T_db9ef_row3_col6" class="data row3 col6" >+5.8K</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row4_col0" class="data row4 col0" >Broad Market (proxy: SPEM)</td>
+      <td id="T_db9ef_row4_col1" class="data row4 col1" >0.11%</td>
+      <td id="T_db9ef_row4_col2" class="data row4 col2" >0.26%</td>
+      <td id="T_db9ef_row4_col3" class="data row4 col3" >+0.15%</td>
+      <td id="T_db9ef_row4_col4" class="data row4 col4" >3.3K</td>
+      <td id="T_db9ef_row4_col5" class="data row4 col5" >7.8K</td>
+      <td id="T_db9ef_row4_col6" class="data row4 col6" >+4.6K</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row5_col0" class="data row5 col0" >Broad Market (proxy: CEU1.L)</td>
+      <td id="T_db9ef_row5_col1" class="data row5 col1" >0.07%</td>
+      <td id="T_db9ef_row5_col2" class="data row5 col2" >0.17%</td>
+      <td id="T_db9ef_row5_col3" class="data row5 col3" >+0.10%</td>
+      <td id="T_db9ef_row5_col4" class="data row5 col4" >2.1K</td>
+      <td id="T_db9ef_row5_col5" class="data row5 col5" >5.0K</td>
+      <td id="T_db9ef_row5_col6" class="data row5 col6" >+2.9K</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row6_col0" class="data row6 col0" >Cash</td>
+      <td id="T_db9ef_row6_col1" class="data row6 col1" >0.27%</td>
+      <td id="T_db9ef_row6_col2" class="data row6 col2" >0.36%</td>
+      <td id="T_db9ef_row6_col3" class="data row6 col3" >+0.10%</td>
+      <td id="T_db9ef_row6_col4" class="data row6 col4" >7.9K</td>
+      <td id="T_db9ef_row6_col5" class="data row6 col5" >10.8K</td>
+      <td id="T_db9ef_row6_col6" class="data row6 col6" >+2.9K</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row7_col0" class="data row7 col0" >Treasury 20+Y</td>
+      <td id="T_db9ef_row7_col1" class="data row7 col1" >0.05%</td>
+      <td id="T_db9ef_row7_col2" class="data row7 col2" >0.12%</td>
+      <td id="T_db9ef_row7_col3" class="data row7 col3" >+0.07%</td>
+      <td id="T_db9ef_row7_col4" class="data row7 col4" >1.5K</td>
+      <td id="T_db9ef_row7_col5" class="data row7 col5" >3.6K</td>
+      <td id="T_db9ef_row7_col6" class="data row7 col6" >+2.1K</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row8_col0" class="data row8 col0" >TIPS 0-5Y</td>
+      <td id="T_db9ef_row8_col1" class="data row8 col1" >0.05%</td>
+      <td id="T_db9ef_row8_col2" class="data row8 col2" >0.11%</td>
+      <td id="T_db9ef_row8_col3" class="data row8 col3" >+0.07%</td>
+      <td id="T_db9ef_row8_col4" class="data row8 col4" >1.4K</td>
+      <td id="T_db9ef_row8_col5" class="data row8 col5" >3.3K</td>
+      <td id="T_db9ef_row8_col6" class="data row8 col6" >+1.9K</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row9_col0" class="data row9 col0" >Gold</td>
+      <td id="T_db9ef_row9_col1" class="data row9 col1" >0.89%</td>
+      <td id="T_db9ef_row9_col2" class="data row9 col2" >0.93%</td>
+      <td id="T_db9ef_row9_col3" class="data row9 col3" >+0.05%</td>
+      <td id="T_db9ef_row9_col4" class="data row9 col4" >26.2K</td>
+      <td id="T_db9ef_row9_col5" class="data row9 col5" >27.6K</td>
+      <td id="T_db9ef_row9_col6" class="data row9 col6" >+1.4K</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row10_col0" class="data row10 col0" >Broad Market (proxy: MCHI)</td>
+      <td id="T_db9ef_row10_col1" class="data row10 col1" >0.03%</td>
+      <td id="T_db9ef_row10_col2" class="data row10 col2" >0.08%</td>
+      <td id="T_db9ef_row10_col3" class="data row10 col3" >+0.05%</td>
+      <td id="T_db9ef_row10_col4" class="data row10 col4" >1.0K</td>
+      <td id="T_db9ef_row10_col5" class="data row10 col5" >2.4K</td>
+      <td id="T_db9ef_row10_col6" class="data row10 col6" >+1.4K</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row11_col0" class="data row11 col0" >MBS</td>
+      <td id="T_db9ef_row11_col1" class="data row11 col1" >0.03%</td>
+      <td id="T_db9ef_row11_col2" class="data row11 col2" >0.08%</td>
+      <td id="T_db9ef_row11_col3" class="data row11 col3" >+0.05%</td>
+      <td id="T_db9ef_row11_col4" class="data row11 col4" >1.0K</td>
+      <td id="T_db9ef_row11_col5" class="data row11 col5" >2.4K</td>
+      <td id="T_db9ef_row11_col6" class="data row11 col6" >+1.4K</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row12_col0" class="data row12 col0" >Treasury 7-10Y</td>
+      <td id="T_db9ef_row12_col1" class="data row12 col1" >0.02%</td>
+      <td id="T_db9ef_row12_col2" class="data row12 col2" >0.06%</td>
+      <td id="T_db9ef_row12_col3" class="data row12 col3" >+0.03%</td>
+      <td id="T_db9ef_row12_col4" class="data row12 col4" >713</td>
+      <td id="T_db9ef_row12_col5" class="data row12 col5" >1.7K</td>
+      <td id="T_db9ef_row12_col6" class="data row12 col6" >+998</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row13_col0" class="data row13 col0" >Treasury 0-1Y</td>
+      <td id="T_db9ef_row13_col1" class="data row13 col1" >0.02%</td>
+      <td id="T_db9ef_row13_col2" class="data row13 col2" >0.05%</td>
+      <td id="T_db9ef_row13_col3" class="data row13 col3" >+0.03%</td>
+      <td id="T_db9ef_row13_col4" class="data row13 col4" >575</td>
+      <td id="T_db9ef_row13_col5" class="data row13 col5" >1.4K</td>
+      <td id="T_db9ef_row13_col6" class="data row13 col6" >+805</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row14_col0" class="data row14 col0" >Industrials</td>
+      <td id="T_db9ef_row14_col1" class="data row14 col1" >0.55%</td>
+      <td id="T_db9ef_row14_col2" class="data row14 col2" >0.57%</td>
+      <td id="T_db9ef_row14_col3" class="data row14 col3" >+0.02%</td>
+      <td id="T_db9ef_row14_col4" class="data row14 col4" >16.4K</td>
+      <td id="T_db9ef_row14_col5" class="data row14 col5" >16.9K</td>
+      <td id="T_db9ef_row14_col6" class="data row14 col6" >+521</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row15_col0" class="data row15 col0" >Hedged</td>
+      <td id="T_db9ef_row15_col1" class="data row15 col1" >0.72%</td>
+      <td id="T_db9ef_row15_col2" class="data row15 col2" >0.74%</td>
+      <td id="T_db9ef_row15_col3" class="data row15 col3" >+0.02%</td>
+      <td id="T_db9ef_row15_col4" class="data row15 col4" >21.4K</td>
+      <td id="T_db9ef_row15_col5" class="data row15 col5" >21.9K</td>
+      <td id="T_db9ef_row15_col6" class="data row15 col6" >+499</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row16_col0" class="data row16 col0" >USD Sovereign</td>
+      <td id="T_db9ef_row16_col1" class="data row16 col1" >0.01%</td>
+      <td id="T_db9ef_row16_col2" class="data row16 col2" >0.02%</td>
+      <td id="T_db9ef_row16_col3" class="data row16 col3" >+0.01%</td>
+      <td id="T_db9ef_row16_col4" class="data row16 col4" >302</td>
+      <td id="T_db9ef_row16_col5" class="data row16 col5" >725</td>
+      <td id="T_db9ef_row16_col6" class="data row16 col6" >+423</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row17_col0" class="data row17 col0" >Aerospace & Defense</td>
+      <td id="T_db9ef_row17_col1" class="data row17 col1" >0.42%</td>
+      <td id="T_db9ef_row17_col2" class="data row17 col2" >0.42%</td>
+      <td id="T_db9ef_row17_col3" class="data row17 col3" >+0.00%</td>
+      <td id="T_db9ef_row17_col4" class="data row17 col4" >12.3K</td>
+      <td id="T_db9ef_row17_col5" class="data row17 col5" >12.3K</td>
+      <td id="T_db9ef_row17_col6" class="data row17 col6" >0</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row18_col0" class="data row18 col0" >Aggregate</td>
+      <td id="T_db9ef_row18_col1" class="data row18 col1" >0.16%</td>
+      <td id="T_db9ef_row18_col2" class="data row18 col2" >0.16%</td>
+      <td id="T_db9ef_row18_col3" class="data row18 col3" >+0.00%</td>
+      <td id="T_db9ef_row18_col4" class="data row18 col4" >4.8K</td>
+      <td id="T_db9ef_row18_col5" class="data row18 col5" >4.8K</td>
+      <td id="T_db9ef_row18_col6" class="data row18 col6" >0</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row19_col0" class="data row19 col0" >Health Care</td>
+      <td id="T_db9ef_row19_col1" class="data row19 col1" >0.50%</td>
+      <td id="T_db9ef_row19_col2" class="data row19 col2" >0.50%</td>
+      <td id="T_db9ef_row19_col3" class="data row19 col3" >+0.00%</td>
+      <td id="T_db9ef_row19_col4" class="data row19 col4" >14.7K</td>
+      <td id="T_db9ef_row19_col5" class="data row19 col5" >14.7K</td>
+      <td id="T_db9ef_row19_col6" class="data row19 col6" >0</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row20_col0" class="data row20 col0" >Dividend</td>
+      <td id="T_db9ef_row20_col1" class="data row20 col1" >0.81%</td>
+      <td id="T_db9ef_row20_col2" class="data row20 col2" >0.81%</td>
+      <td id="T_db9ef_row20_col3" class="data row20 col3" >+0.00%</td>
+      <td id="T_db9ef_row20_col4" class="data row20 col4" >23.9K</td>
+      <td id="T_db9ef_row20_col5" class="data row20 col5" >23.9K</td>
+      <td id="T_db9ef_row20_col6" class="data row20 col6" >0</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row21_col0" class="data row21 col0" >Government</td>
+      <td id="T_db9ef_row21_col1" class="data row21 col1" >0.12%</td>
+      <td id="T_db9ef_row21_col2" class="data row21 col2" >0.12%</td>
+      <td id="T_db9ef_row21_col3" class="data row21 col3" >+0.00%</td>
+      <td id="T_db9ef_row21_col4" class="data row21 col4" >3.6K</td>
+      <td id="T_db9ef_row21_col5" class="data row21 col5" >3.6K</td>
+      <td id="T_db9ef_row21_col6" class="data row21 col6" >0</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row22_col0" class="data row22 col0" >Consumer Staples</td>
+      <td id="T_db9ef_row22_col1" class="data row22 col1" >0.67%</td>
+      <td id="T_db9ef_row22_col2" class="data row22 col2" >0.67%</td>
+      <td id="T_db9ef_row22_col3" class="data row22 col3" >+0.00%</td>
+      <td id="T_db9ef_row22_col4" class="data row22 col4" >19.7K</td>
+      <td id="T_db9ef_row22_col5" class="data row22 col5" >19.7K</td>
+      <td id="T_db9ef_row22_col6" class="data row22 col6" >0</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row23_col0" class="data row23 col0" >Consumer Discretionary</td>
+      <td id="T_db9ef_row23_col1" class="data row23 col1" >0.28%</td>
+      <td id="T_db9ef_row23_col2" class="data row23 col2" >0.28%</td>
+      <td id="T_db9ef_row23_col3" class="data row23 col3" >+0.00%</td>
+      <td id="T_db9ef_row23_col4" class="data row23 col4" >8.4K</td>
+      <td id="T_db9ef_row23_col5" class="data row23 col5" >8.4K</td>
+      <td id="T_db9ef_row23_col6" class="data row23 col6" >0</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row24_col0" class="data row24 col0" >Aggregate (proxy: AGG)</td>
+      <td id="T_db9ef_row24_col1" class="data row24 col1" >0.11%</td>
+      <td id="T_db9ef_row24_col2" class="data row24 col2" >0.11%</td>
+      <td id="T_db9ef_row24_col3" class="data row24 col3" >+0.00%</td>
+      <td id="T_db9ef_row24_col4" class="data row24 col4" >3.4K</td>
+      <td id="T_db9ef_row24_col5" class="data row24 col5" >3.4K</td>
+      <td id="T_db9ef_row24_col6" class="data row24 col6" >0</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row25_col0" class="data row25 col0" >Energy</td>
+      <td id="T_db9ef_row25_col1" class="data row25 col1" >0.57%</td>
+      <td id="T_db9ef_row25_col2" class="data row25 col2" >0.57%</td>
+      <td id="T_db9ef_row25_col3" class="data row25 col3" >+0.00%</td>
+      <td id="T_db9ef_row25_col4" class="data row25 col4" >16.8K</td>
+      <td id="T_db9ef_row25_col5" class="data row25 col5" >16.8K</td>
+      <td id="T_db9ef_row25_col6" class="data row25 col6" >0</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row26_col0" class="data row26 col0" >Nasdaq Covered Call (proxy: JEPQ.L UCITS)</td>
+      <td id="T_db9ef_row26_col1" class="data row26 col1" >0.27%</td>
+      <td id="T_db9ef_row26_col2" class="data row26 col2" >0.27%</td>
+      <td id="T_db9ef_row26_col3" class="data row26 col3" >+0.00%</td>
+      <td id="T_db9ef_row26_col4" class="data row26 col4" >7.9K</td>
+      <td id="T_db9ef_row26_col5" class="data row26 col5" >7.9K</td>
+      <td id="T_db9ef_row26_col6" class="data row26 col6" >0</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row27_col0" class="data row27 col0" >Money Market</td>
+      <td id="T_db9ef_row27_col1" class="data row27 col1" >68.58%</td>
+      <td id="T_db9ef_row27_col2" class="data row27 col2" >68.58%</td>
+      <td id="T_db9ef_row27_col3" class="data row27 col3" >+0.00%</td>
+      <td id="T_db9ef_row27_col4" class="data row27 col4" >2.03M</td>
+      <td id="T_db9ef_row27_col5" class="data row27 col5" >2.03M</td>
+      <td id="T_db9ef_row27_col6" class="data row27 col6" >0</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row28_col0" class="data row28 col0" >High Yield (proxy: HYG)</td>
+      <td id="T_db9ef_row28_col1" class="data row28 col1" >0.03%</td>
+      <td id="T_db9ef_row28_col2" class="data row28 col2" >0.03%</td>
+      <td id="T_db9ef_row28_col3" class="data row28 col3" >+0.00%</td>
+      <td id="T_db9ef_row28_col4" class="data row28 col4" >747</td>
+      <td id="T_db9ef_row28_col5" class="data row28 col5" >747</td>
+      <td id="T_db9ef_row28_col6" class="data row28 col6" >0</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row29_col0" class="data row29 col0" >High Yield USD</td>
+      <td id="T_db9ef_row29_col1" class="data row29 col1" >0.11%</td>
+      <td id="T_db9ef_row29_col2" class="data row29 col2" >0.11%</td>
+      <td id="T_db9ef_row29_col3" class="data row29 col3" >+0.00%</td>
+      <td id="T_db9ef_row29_col4" class="data row29 col4" >3.2K</td>
+      <td id="T_db9ef_row29_col5" class="data row29 col5" >3.2K</td>
+      <td id="T_db9ef_row29_col6" class="data row29 col6" >0</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row30_col0" class="data row30 col0" >Treasury 0-3M (proxy: BIL)</td>
+      <td id="T_db9ef_row30_col1" class="data row30 col1" >9.29%</td>
+      <td id="T_db9ef_row30_col2" class="data row30 col2" >9.29%</td>
+      <td id="T_db9ef_row30_col3" class="data row30 col3" >+0.00%</td>
+      <td id="T_db9ef_row30_col4" class="data row30 col4" >274.2K</td>
+      <td id="T_db9ef_row30_col5" class="data row30 col5" >274.2K</td>
+      <td id="T_db9ef_row30_col6" class="data row30 col6" >0</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row31_col0" class="data row31 col0" >Technology</td>
+      <td id="T_db9ef_row31_col1" class="data row31 col1" >1.06%</td>
+      <td id="T_db9ef_row31_col2" class="data row31 col2" >1.06%</td>
+      <td id="T_db9ef_row31_col3" class="data row31 col3" >+0.00%</td>
+      <td id="T_db9ef_row31_col4" class="data row31 col4" >31.2K</td>
+      <td id="T_db9ef_row31_col5" class="data row31 col5" >31.2K</td>
+      <td id="T_db9ef_row31_col6" class="data row31 col6" >0</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row32_col0" class="data row32 col0" >USD Sovereign (proxy: EMB)</td>
+      <td id="T_db9ef_row32_col1" class="data row32 col1" >0.03%</td>
+      <td id="T_db9ef_row32_col2" class="data row32 col2" >0.03%</td>
+      <td id="T_db9ef_row32_col3" class="data row32 col3" >+0.00%</td>
+      <td id="T_db9ef_row32_col4" class="data row32 col4" >853</td>
+      <td id="T_db9ef_row32_col5" class="data row32 col5" >853</td>
+      <td id="T_db9ef_row32_col6" class="data row32 col6" >0</td>
+    </tr>
+    <tr>
+      <td id="T_db9ef_row33_col0" class="data row33 col0" >Utilities</td>
+      <td id="T_db9ef_row33_col1" class="data row33 col1" >0.13%</td>
+      <td id="T_db9ef_row33_col2" class="data row33 col2" >0.13%</td>
+      <td id="T_db9ef_row33_col3" class="data row33 col3" >+0.00%</td>
+      <td id="T_db9ef_row33_col4" class="data row33 col4" >3.9K</td>
+      <td id="T_db9ef_row33_col5" class="data row33 col5" >3.9K</td>
+      <td id="T_db9ef_row33_col6" class="data row33 col6" >0</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+</div>
+
+<h2>Redundancy lifecycle</h2>
+<p class="footnote">
+  Pairs whose correlation crosses the redundancy threshold (0.85) in current vs proposed.
+  <strong>Appeared</strong> = new redundancy created by the scenario.
+  <strong>Disappeared</strong> = redundancy removed.
+  <strong>Persisted</strong> = pair still flagged in both (with current ρ → proposed ρ).
+</p>
+<p><em>Appeared in proposed:</em> none.</p><p><em>Disappeared in proposed:</em> none.</p><h3>Persisted in both</h3><style type="text/css">
+#T_59c47_row0_col2, #T_59c47_row0_col3, #T_59c47_row3_col2, #T_59c47_row3_col3 {
+  background-color: rgba(248, 81, 73, 0.36);
+  color: #f85149;
+}
+#T_59c47_row1_col2, #T_59c47_row1_col3, #T_59c47_row2_col2, #T_59c47_row2_col3 {
+  background-color: rgba(248, 81, 73, 0.45);
+  color: #f85149;
+}
+</style>
+<table id="T_59c47" class="ds-table">
+  <thead>
+    <tr>
+      <th id="T_59c47_level0_col0" class="col_heading level0 col0" >Portfolio A</th>
+      <th id="T_59c47_level0_col1" class="col_heading level0 col1" >Portfolio B</th>
+      <th id="T_59c47_level0_col2" class="col_heading level0 col2" >ρ current</th>
+      <th id="T_59c47_level0_col3" class="col_heading level0 col3" >ρ proposed</th>
+      <th id="T_59c47_level0_col4" class="col_heading level0 col4" >Δρ</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td id="T_59c47_row0_col0" class="data row0 col0" >General Investing</td>
+      <td id="T_59c47_row0_col1" class="data row0 col1" >Ex-US Large-cap</td>
+      <td id="T_59c47_row0_col2" class="data row0 col2" >0.895</td>
+      <td id="T_59c47_row0_col3" class="data row0 col3" >0.895</td>
+      <td id="T_59c47_row0_col4" class="data row0 col4" >+0.000</td>
+    </tr>
+    <tr>
+      <td id="T_59c47_row1_col0" class="data row1 col0" >General Investing</td>
+      <td id="T_59c47_row1_col1" class="data row1 col1" >General SRS</td>
+      <td id="T_59c47_row1_col2" class="data row1 col2" >0.999</td>
+      <td id="T_59c47_row1_col3" class="data row1 col3" >0.999</td>
+      <td id="T_59c47_row1_col4" class="data row1 col4" >+0.000</td>
+    </tr>
+    <tr>
+      <td id="T_59c47_row2_col0" class="data row2 col0" >Guitsa</td>
+      <td id="T_59c47_row2_col1" class="data row2 col1" >Simple SGD</td>
+      <td id="T_59c47_row2_col2" class="data row2 col2" >1.000</td>
+      <td id="T_59c47_row2_col3" class="data row2 col3" >1.000</td>
+      <td id="T_59c47_row2_col4" class="data row2 col4" >+0.000</td>
+    </tr>
+    <tr>
+      <td id="T_59c47_row3_col0" class="data row3 col0" >Ex-US Large-cap</td>
+      <td id="T_59c47_row3_col1" class="data row3 col1" >General SRS</td>
+      <td id="T_59c47_row3_col2" class="data row3 col2" >0.905</td>
+      <td id="T_59c47_row3_col3" class="data row3 col3" >0.905</td>
+      <td id="T_59c47_row3_col4" class="data row3 col4" >+0.000</td>
+    </tr>
+  </tbody>
+</table>
+
+
+<script>
+(function () {
+  function parseCell(text) {
+    var t = (text || "").trim();
+    if (t === "" || t === "—" || t.toLowerCase() === "nan") return null;
+    var compact = t.match(/^([-+]?[0-9]+(?:\.[0-9]+)?)\s*([KMB])$/i);
+    if (compact) {
+      var mult = { K: 1e3, M: 1e6, B: 1e9 }[compact[2].toUpperCase()];
+      return parseFloat(compact[1]) * mult;
+    }
+    if (/%$/.test(t)) {
+      var pct = parseFloat(t.replace(/[^0-9.+\-]/g, ""));
+      return isNaN(pct) ? t : pct / 100;
+    }
+    var stripped = t.replace(/[,\s]/g, "");
+    if (/^[-+]?[0-9]+(?:\.[0-9]+)?$/.test(stripped)) return parseFloat(stripped);
+    return t.toLowerCase();
+  }
+  function compare(a, b) {
+    if (a === null && b === null) return 0;
+    if (a === null) return 1;
+    if (b === null) return -1;
+    if (typeof a === "number" && typeof b === "number") return a - b;
+    return String(a).localeCompare(String(b));
+  }
+  function makeSortable(table) {
+    var headerRows = table.querySelectorAll("thead tr");
+    if (!headerRows.length) return;
+    var headers = headerRows[headerRows.length - 1].querySelectorAll("th");
+    var tbody = table.querySelector("tbody");
+    if (!tbody) return;
+    headers.forEach(function (th, idx) {
+      th.addEventListener("click", function () {
+        var current = th.getAttribute("data-sort-dir");
+        var nextDir = current === "asc" ? "desc" : "asc";
+        headers.forEach(function (h) { h.removeAttribute("data-sort-dir"); });
+        th.setAttribute("data-sort-dir", nextDir);
+        var rows = Array.prototype.slice.call(tbody.querySelectorAll("tr"));
+        rows.sort(function (rA, rB) {
+          var vA = parseCell(rA.cells[idx] ? rA.cells[idx].textContent : "");
+          var vB = parseCell(rB.cells[idx] ? rB.cells[idx].textContent : "");
+          var c = compare(vA, vB);
+          return nextDir === "asc" ? c : -c;
+        });
+        rows.forEach(function (r) { tbody.appendChild(r); });
+      });
+    });
+  }
+  document.addEventListener("DOMContentLoaded", function () {
+    document.querySelectorAll("table.ds-table").forEach(makeSortable);
+  });
+})();
+</script>
+</body></html>

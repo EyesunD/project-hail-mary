@@ -174,36 +174,24 @@ def last_business_day_on_or_before(d: date | datetime | None = None) -> date:
     return target
 
 
-_CASH_ANNUAL_YIELDS: dict[str, float] = {
-    # Stashaway Simple SGD / Guitsa: 1.5% p.a. net of fees per stashaway.sg/simple-var3
-    "CASH_SGD": 0.015,
-    # Stashaway Simple USD: approximated as short-rate USD (BIL ≈ SOFR ≈ 5% in 2026).
-    "CASH_USD": 0.05,
-}
-_CASH_ANNUAL_VOLS: dict[str, float] = {
-    # 30% LionGlobal SGD MMF + 70% LionGlobal SGD Enhanced Liquidity has some duration risk
-    "CASH_SGD": 0.0035,
-    # US 1-3M T-Bills track the front of the SOFR curve — very stable
-    "CASH_USD": 0.0015,
-}
+# Synthetic cash (M5) was dropped 2026-05-31: CASH_USD/CASH_SGD now return
+# zero. Real MMF positions (LionGlobal, OCBC, BB3M) use real Yahoo tickers
+# through the buy-and-hold path with M6 forward-accrual when Yahoo NAV lags.
+# Footprint of the dropped synthetic was ~$30 SGD/month — not worth the
+# complexity of carrying a Normal(yield, vol) draw through the reconciliation.
+_CASH_ANNUAL_YIELDS: dict[str, float] = {"CASH_SGD": 0.0, "CASH_USD": 0.0}
 _TRADING_DAYS_PER_YEAR = 252
 
 
 def synthesise_cash_returns(
     returns: pd.DataFrame, cash_tickers: Iterable[str]
 ) -> pd.DataFrame:
-    """Add synthetic daily return columns for the given ``CASH_*`` tickers.
+    """Add zero-return columns for ``CASH_*`` tickers.
 
-    Drawn from ``Normal(daily_yield, daily_vol)`` where the annual yield matches the
-    product's published net rate (Stashaway Simple SGD/Guitsa ≈ 1.5%, Simple USD
-    proxied at the US short rate ≈ 5%) and the annual vol matches the realistic
-    NAV-wobble of money-market / enhanced-liquidity sleeves (≈ 35 bps for SGD,
-    ≈ 15 bps for USD). Non-zero vol so correlation against other return series is
-    defined — it will still be near zero versus risk assets, which is correct for
-    cash. Seeded per ticker for reproducibility.
-
-    Tickers not starting with ``CASH_`` are silently ignored. Tickers already
-    present as columns in *returns* are left as-is.
+    M5 (synthetic-cash with Normal(yield, vol) draw) was dropped 2026-05-31.
+    Real cash positions are covered by real Yahoo tickers (LionGlobal etc.).
+    The remaining CASH_USD / CASH_SGD placeholders exist only so legacy
+    portfolios still validate; they contribute zero return.
     """
     needed = sorted(
         t for t in set(cash_tickers)
@@ -215,17 +203,8 @@ def synthesise_cash_returns(
         idx = pd.bdate_range(date(2015, 1, 1), date.today(), name="date")
         returns = pd.DataFrame(index=idx)
     out = returns.copy()
-    n = len(out.index)
     for t in needed:
-        annual_yield = _CASH_ANNUAL_YIELDS.get(t, 0.0)
-        annual_vol = _CASH_ANNUAL_VOLS.get(t, 0.0)
-        daily_mean = (1.0 + annual_yield) ** (1.0 / _TRADING_DAYS_PER_YEAR) - 1.0
-        daily_vol = annual_vol / np.sqrt(_TRADING_DAYS_PER_YEAR)
-        if daily_vol == 0.0:
-            out[t] = daily_mean
-        else:
-            rng = np.random.default_rng(seed=abs(hash(t)) % (2**32))
-            out[t] = rng.normal(daily_mean, daily_vol, size=n)
+        out[t] = 0.0
     return out
 
 

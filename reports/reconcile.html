@@ -1,0 +1,2820 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>Allocation Reconciliation</title>
+<style>
+  body { font-family: Inter, system-ui, sans-serif; background: #0d1117; color: #e6edf3;
+         margin: 0; padding: 24px; max-width: 1400px; }
+  h1, h2, h3 { color: #e6edf3; }
+  h1 { margin: 0 0 4px 0; }
+  h2 { border-bottom: 1px solid #30363d; padding-bottom: 6px; margin-top: 32px; }
+  .meta { color: #8b949e; font-size: 13px; }
+  .meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+               gap: 12px; margin: 16px 0; }
+  .meta-card { background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+               padding: 10px 14px; }
+  .meta-card .label { font-size: 11px; color: #8b949e; text-transform: uppercase; }
+  .meta-card .val   { font-size: 16px; font-weight: 600; margin-top: 4px;
+                      font-variant-numeric: tabular-nums; color: #e6edf3; }
+  .ds-table { border-collapse: collapse; margin-top: 8px; font-size: 12.5px; width: 100%; }
+  .ds-table th, .ds-table td { border: 1px solid #30363d; padding: 5px 9px; text-align: right; }
+  .ds-table th { background: #161b22; text-align: left; }
+  .ds-table td:first-child, .ds-table th:first-child { text-align: left; }
+  .ds-table td:nth-child(2), .ds-table th:nth-child(2) { text-align: center; }
+  .ds-table td { font-variant-numeric: tabular-nums; }
+  .ds-table tbody tr:hover { background: #1f2730; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px;
+           font-size: 11px; font-weight: 600; }
+  .badge.ok { background: rgba(63, 185, 80, 0.18); color: #3fb950; }
+  .badge.noise { background: rgba(210, 153, 34, 0.18); color: #d29922; }
+  .badge.warn { background: rgba(248, 81, 73, 0.20); color: #f85149; }
+  .badge.muted { background: #21262d; color: #8b949e; }
+  .footnote { color: #8b949e; font-size: 12px; max-width: 1100px; line-height: 1.55; }
+  .footnote ul { padding-left: 20px; }
+  .footnote li { margin-bottom: 6px; }
+  .footnote code { background: #161b22; padding: 1px 5px; border-radius: 3px; font-size: 11.5px; }
+  .deposits-log td { font-variant-numeric: tabular-nums; }
+  .copy-wrap { margin-top: 8px; }
+  .copy-btn { background: #161b22; color: #8b949e; border: 1px solid #30363d;
+              border-radius: 4px; padding: 3px 9px; font-size: 11px;
+              font-family: inherit; cursor: pointer; user-select: none; }
+  .copy-btn:hover { background: #1f2730; color: #e6edf3; border-color: #58a6ff; }
+  .copy-btn.copied { background: rgba(63, 185, 80, 0.18); color: #3fb950;
+                     border-color: #3fb950; }
+  details.drill { background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+                  padding: 8px 14px; margin: 8px 0; }
+  details.drill[open] { padding-bottom: 14px; }
+  details.drill summary { cursor: pointer; user-select: none; font-size: 13px;
+                          color: #e6edf3; padding: 4px 0; }
+  details.drill summary:hover { color: #58a6ff; }
+  details.drill summary .pos { color: #3fb950; }
+  details.drill summary .neg { color: #f85149; }
+  details.drill summary a.port-link { color: #58a6ff; font-weight: 600;
+                                       text-decoration: none; border-bottom: 1px dotted #58a6ff; }
+  details.drill summary a.port-link:hover { color: #a371f7; border-bottom-color: #a371f7; }
+  details.drill .ds-holdings { margin-top: 10px; width: 100%; max-width: 1300px; }
+</style>
+</head><body>
+<h1>Allocation Reconciliation</h1>
+<p class="meta">Generated 2026-05-31T17:41:45</p>
+
+<div class="meta-grid">
+  <div class="meta-card"><div class="label">Statement Date</div>
+       <div class="val">2026-04-30</div></div>
+  <div class="meta-card"><div class="label">Reconciliation As-Of</div>
+       <div class="val">2026-05-29</div></div>
+  <div class="meta-card"><div class="label">App Start Snapshot</div>
+       <div class="val">2026-04-30</div></div>
+  <div class="meta-card"><div class="label">App End Snapshot</div>
+       <div class="val">2026-05-31</div></div>
+  <div class="meta-card"><div class="label">Deposits Logged Since Stmt</div>
+       <div class="val">12</div></div>
+</div>
+
+<h2>Reconciliation — Performance + Model accuracy</h2>
+<p class="footnote">App start and App end both come from your
+<code>Portfolio SGD Values</code> sheet — they are the values Stashaway showed
+on those dates. <strong>Δ Perf</strong> = app_end − app_start − deposits
+(real performance, deposit-adjusted). <strong>Our Model</strong> is the
+piecewise-compounded sleeve value used to validate the model. <strong>Gap</strong>
+= our model + deposits − app_end. Status:
+<span class="badge ok">exact</span> &lt; 0.05% &nbsp;
+<span class="badge ok">ok</span> &lt; 0.3% &nbsp;
+<span class="badge noise">noise</span> &lt; 1% &nbsp;
+<span class="badge warn">⚠ investigate</span> ≥ 1%.</p>
+<table class="ds-table reconcile-table"><thead><tr><th>Sleeve</th><th>Ccy</th><th>App (2026-04-30)</th><th>App (2026-05-31)</th><th>+ Deposits</th><th>Δ Perf $</th><th>Δ Perf %</th><th>Our Model</th><th>Gap $</th><th>Gap %</th><th>Status</th></tr></thead><tbody><tr><td>BlackRock</td><td>USD</td><td>$49,884.05</td><td>$52,369.31</td><td>+0.00</td><td>+2,485.26</td><td>+4.98%</td><td>$52,363.50</td><td>-5.81</td><td>-0.01%</td><td><span class="badge ok">exact</span></td></tr><tr><td>Energy</td><td>USD</td><td>$10,466.95</td><td>$9,903.75</td><td>+0.00</td><td>-563.20</td><td>-5.38%</td><td>$9,902.19</td><td>-1.56</td><td>-0.02%</td><td><span class="badge ok">exact</span></td></tr><tr><td>General Investing</td><td>USD</td><td>$473,055.02</td><td>$492,821.78</td><td>+2,100.00</td><td>+17,666.76</td><td>+3.73%</td><td>$489,257.84</td><td>-1,463.94</td><td>-0.30%</td><td><span class="badge ok">ok</span></td></tr><tr><td>Simple USD</td><td>USD</td><td>$349,108.70</td><td>$350,771.43</td><td>+0.00</td><td>+1,662.73</td><td>+0.48%</td><td>$350,694.66</td><td>-76.77</td><td>-0.02%</td><td><span class="badge ok">exact</span></td></tr><tr><td>Singapore Investing</td><td>SGD</td><td>$19,979.29</td><td>$20,142.27</td><td>+0.00</td><td>+162.98</td><td>+0.82%</td><td>$20,143.33</td><td>+1.06</td><td>+0.01%</td><td><span class="badge ok">exact</span></td></tr><tr><td>Utilities</td><td>USD</td><td>$4,982.24</td><td>$4,736.44</td><td>+0.00</td><td>-245.80</td><td>-4.93%</td><td>$4,735.69</td><td>-0.75</td><td>-0.02%</td><td><span class="badge ok">exact</span></td></tr><tr><td>Income Investing</td><td>SGD</td><td>$5,015.85</td><td>$5,043.68</td><td>+0.00</td><td>+27.83</td><td>+0.55%</td><td>$5,031.26</td><td>-12.42</td><td>-0.25%</td><td><span class="badge ok">ok</span></td></tr><tr><td>High Dividend Yield</td><td>USD</td><td>$30,379.43</td><td>$30,848.11</td><td>+0.00</td><td>+468.68</td><td>+1.54%</td><td>$30,843.29</td><td>-4.82</td><td>-0.02%</td><td><span class="badge ok">exact</span></td></tr><tr><td>Ex-US Large-cap</td><td>USD</td><td>$10,012.84</td><td>$10,421.70</td><td>+0.00</td><td>+408.86</td><td>+4.08%</td><td>$10,420.07</td><td>-1.63</td><td>-0.02%</td><td><span class="badge ok">exact</span></td></tr><tr><td>SG ETF</td><td>SGD</td><td>$9,864.54</td><td>$20,109.85</td><td>+10,000.00</td><td>+245.31</td><td>+2.49%</td><td>$10,223.46</td><td>+113.61</td><td>+0.56%</td><td><span class="badge noise">noise</span></td></tr><tr><td>Nasdaq Covered Call</td><td>USD</td><td>$10,046.53</td><td>$10,518.43</td><td>+0.00</td><td>+471.90</td><td>+4.70%</td><td>$10,519.26</td><td>+0.83</td><td>+0.01%</td><td><span class="badge ok">exact</span></td></tr><tr><td>Guitsa</td><td>SGD</td><td>$72,752.28</td><td>$72,848.81</td><td>+0.00</td><td>+96.53</td><td>+0.13%</td><td>$72,822.00</td><td>-26.81</td><td>-0.04%</td><td><span class="badge ok">exact</span></td></tr><tr><td>Simple SGD</td><td>SGD</td><td>$1,952,415.36</td><td>$1,957,672.69</td><td>+2,850.00</td><td>+2,407.33</td><td>+0.12%</td><td>$1,954,286.27</td><td>-536.42</td><td>-0.03%</td><td><span class="badge ok">exact</span></td></tr><tr><td>General SRS</td><td>USD</td><td>$128,975.10</td><td>$133,278.43</td><td>+0.00</td><td>+4,303.33</td><td>+3.34%</td><td>$132,820.13</td><td>-458.30</td><td>-0.34%</td><td><span class="badge noise">noise</span></td></tr><tr><td>Crypto</td><td>USD</td><td>$69,775.10</td><td>$65,760.13</td><td>+1,050.00</td><td>-5,064.97</td><td>-7.26%</td><td>$64,785.71</td><td>+75.58</td><td>+0.11%</td><td><span class="badge ok">ok</span></td></tr><tr><td>Investment-Grade SGD</td><td>SGD</td><td>$0.00</td><td>$9,988.95</td><td>+0.00</td><td>+9,988.95</td><td>—</td><td>$10,000.00</td><td>+11.05</td><td>+0.11%</td><td><span class="badge ok">ok</span></td></tr><tr><td>Global Floating Rate USD</td><td>SGD</td><td>$0.00</td><td>$9,936.37</td><td>+0.00</td><td>+9,936.37</td><td>—</td><td>$10,003.92</td><td>+67.55</td><td>+0.68%</td><td><span class="badge noise">noise</span></td></tr><tr><td>Asia ex-Japan</td><td>SGD</td><td>$0.00</td><td>$10,464.33</td><td>+0.00</td><td>+10,464.33</td><td>—</td><td>$10,421.92</td><td>-42.41</td><td>-0.41%</td><td><span class="badge noise">noise</span></td></tr><tr><td>Japan Currency-hedged</td><td>SGD</td><td>$0.00</td><td>$10,166.32</td><td>+0.00</td><td>+10,166.32</td><td>—</td><td>$10,140.71</td><td>-25.61</td><td>-0.25%</td><td><span class="badge ok">ok</span></td></tr><tr><td>Longevity Stack</td><td>SGD</td><td>$0.00</td><td>$10,237.66</td><td>+0.00</td><td>+10,237.66</td><td>—</td><td>$10,314.61</td><td>+76.95</td><td>+0.75%</td><td><span class="badge noise">noise</span></td></tr><tr><td>The AI Power Stack</td><td>SGD</td><td>$0.00</td><td>$9,928.44</td><td>+0.00</td><td>+9,928.44</td><td>—</td><td>$9,895.71</td><td>-32.73</td><td>-0.33%</td><td><span class="badge noise">noise</span></td></tr></tbody><tfoot><tr style="font-weight:600;border-top:2px solid #30363d;"><td>TOTAL (21 sleeves with app)</td><td></td><td>$3,196,713.28</td><td>$3,297,968.88</td><td>+16,000.00</td><td>+85,255.60</td><td>+2.67%</td><td>$3,279,625.54</td><td>-2,343.34</td><td>-0.07%</td><td></td></tr></tfoot></table>
+
+<h2>Per-portfolio drill-down — holding-by-holding</h2>
+<p class="footnote">Click any portfolio to expand its holdings. For each holding: weight,
+stmt value, stmt and today prices (with the actual price-date used — flagged with
+<code>*</code> and <code>(+Nd)</code> when forward-accrued because Yahoo lags), return,
+today value. <strong>Total row</strong> at the bottom of each sleeve sums to the same
+"Total" cell in the reconciliation table above.</p>
+<p class="footnote">Click any portfolio to expand its holdings. Each row shows the holding's value at statement date, today's spot price, return since statement (price-only, no distributions reinvested past today), and current value. Each table has a <strong>📋 Copy</strong> button that copies headers + rows + the Total row as tab-separated text — paste straight into Excel/Sheets. Portfolio names are linked to the Stashaway app where discoverable from your <code>holding links.xlsx</code>.</p><p class="footnote">Ticker badges: <strong>🟡synth</strong> = synthetic series (no real ticker — return modelled from a published yield, e.g. CASH_USD/CASH_SGD). <strong>🟠proxy</strong> = real ticker but a different (structurally similar) fund than what Stashaway holds; expect modest tracking drift. Unbadged tickers are the exact fund Stashaway holds (verified by ISIN or longName).</p><details class="drill"><summary><a href="https://app.stashaway.sg/goal/5f17ca30ac0f61000d536b96" target="_blank" rel="noopener" class="port-link">Simple SGD</a> · SGD 1.952M → <span class="pos">1.954M</span> (<span class="pos">+1.94K SGD, +0.10%</span>) · 3 holdings</summary><style type="text/css">
+#T_e1c28 tbody tr:nth-child(4) td {
+  font-weight: 600;
+  border-top: 2px solid #30363d;
+}
+#T_e1c28_row0_col8, #T_e1c28_row0_col10, #T_e1c28_row1_col8, #T_e1c28_row1_col10, #T_e1c28_row3_col8, #T_e1c28_row3_col10 {
+  background-color: rgba(63, 185, 80, 0.18);
+  color: #3fb950;
+}
+</style>
+<table id="T_e1c28" class="ds-table ds-holdings">
+  <thead>
+    <tr>
+      <th id="T_e1c28_level0_col0" class="col_heading level0 col0" >Ticker</th>
+      <th id="T_e1c28_level0_col1" class="col_heading level0 col1" >Asset · Region</th>
+      <th id="T_e1c28_level0_col2" class="col_heading level0 col2" >Weight</th>
+      <th id="T_e1c28_level0_col3" class="col_heading level0 col3" >Stmt value (SGD)</th>
+      <th id="T_e1c28_level0_col4" class="col_heading level0 col4" >Stmt price (SGD)</th>
+      <th id="T_e1c28_level0_col5" class="col_heading level0 col5" >Stmt date</th>
+      <th id="T_e1c28_level0_col6" class="col_heading level0 col6" >Today price (SGD)</th>
+      <th id="T_e1c28_level0_col7" class="col_heading level0 col7" >Today date</th>
+      <th id="T_e1c28_level0_col8" class="col_heading level0 col8" >Δ%</th>
+      <th id="T_e1c28_level0_col9" class="col_heading level0 col9" >Today value (SGD)</th>
+      <th id="T_e1c28_level0_col10" class="col_heading level0 col10" >Δ value (SGD)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td id="T_e1c28_row0_col0" class="data row0 col0" >0P0001DB5Z.SI</td>
+      <td id="T_e1c28_row0_col1" class="data row0 col1" >Cash · Singapore</td>
+      <td id="T_e1c28_row0_col2" class="data row0 col2" >70.00%</td>
+      <td id="T_e1c28_row0_col3" class="data row0 col3" >1.367M</td>
+      <td id="T_e1c28_row0_col4" class="data row0 col4" >1.1708</td>
+      <td id="T_e1c28_row0_col5" class="data row0 col5" >2026-04-30</td>
+      <td id="T_e1c28_row0_col6" class="data row0 col6" >1.1720</td>
+      <td id="T_e1c28_row0_col7" class="data row0 col7" >2026-05-29</td>
+      <td id="T_e1c28_row0_col8" class="data row0 col8" >+0.11%</td>
+      <td id="T_e1c28_row0_col9" class="data row0 col9" >1.368M</td>
+      <td id="T_e1c28_row0_col10" class="data row0 col10" >+1.45K</td>
+    </tr>
+    <tr>
+      <td id="T_e1c28_row1_col0" class="data row1 col0" >0P00006FZD.SI</td>
+      <td id="T_e1c28_row1_col1" class="data row1 col1" >Cash · Singapore</td>
+      <td id="T_e1c28_row1_col2" class="data row1 col2" >30.00%</td>
+      <td id="T_e1c28_row1_col3" class="data row1 col3" >585.72K</td>
+      <td id="T_e1c28_row1_col4" class="data row1 col4" >1.4953</td>
+      <td id="T_e1c28_row1_col5" class="data row1 col5" >2026-04-30</td>
+      <td id="T_e1c28_row1_col6" class="data row1 col6" >1.4965</td>
+      <td id="T_e1c28_row1_col7" class="data row1 col7" >2026-05-29</td>
+      <td id="T_e1c28_row1_col8" class="data row1 col8" >+0.08%</td>
+      <td id="T_e1c28_row1_col9" class="data row1 col9" >586.20K</td>
+      <td id="T_e1c28_row1_col10" class="data row1 col10" >+487</td>
+    </tr>
+    <tr>
+      <td id="T_e1c28_row2_col0" class="data row2 col0" >CASH_SGD</td>
+      <td id="T_e1c28_row2_col1" class="data row2 col1" >Cash · Singapore</td>
+      <td id="T_e1c28_row2_col2" class="data row2 col2" >0.00%</td>
+      <td id="T_e1c28_row2_col3" class="data row2 col3" >0</td>
+      <td id="T_e1c28_row2_col4" class="data row2 col4" >—</td>
+      <td id="T_e1c28_row2_col5" class="data row2 col5" >2026-04-30</td>
+      <td id="T_e1c28_row2_col6" class="data row2 col6" >—</td>
+      <td id="T_e1c28_row2_col7" class="data row2 col7" >2026-05-29</td>
+      <td id="T_e1c28_row2_col8" class="data row2 col8" >+0.00%</td>
+      <td id="T_e1c28_row2_col9" class="data row2 col9" >0</td>
+      <td id="T_e1c28_row2_col10" class="data row2 col10" >0</td>
+    </tr>
+    <tr>
+      <td id="T_e1c28_row3_col0" class="data row3 col0" >Total</td>
+      <td id="T_e1c28_row3_col1" class="data row3 col1" ></td>
+      <td id="T_e1c28_row3_col2" class="data row3 col2" >100.00%</td>
+      <td id="T_e1c28_row3_col3" class="data row3 col3" >1.952M</td>
+      <td id="T_e1c28_row3_col4" class="data row3 col4" >—</td>
+      <td id="T_e1c28_row3_col5" class="data row3 col5" >—</td>
+      <td id="T_e1c28_row3_col6" class="data row3 col6" >—</td>
+      <td id="T_e1c28_row3_col7" class="data row3 col7" >—</td>
+      <td id="T_e1c28_row3_col8" class="data row3 col8" >+0.10%</td>
+      <td id="T_e1c28_row3_col9" class="data row3 col9" >1.954M</td>
+      <td id="T_e1c28_row3_col10" class="data row3 col10" >+1.94K</td>
+    </tr>
+  </tbody>
+</table>
+</details>
+<details class="drill"><summary><a href="https://app.stashaway.sg/goal/5c62d40bd58ed90007e55db2" target="_blank" rel="noopener" class="port-link">General Investing</a> · USD 371.55K → <span class="pos">382.06K</span> (<span class="pos">+10.51K USD / +14.60K SGD, +2.83%</span>) · 19 holdings</summary><style type="text/css">
+#T_82b93 tbody tr:nth-child(20) td {
+  font-weight: 600;
+  border-top: 2px solid #30363d;
+}
+#T_82b93_row0_col8, #T_82b93_row0_col10, #T_82b93_row0_col13, #T_82b93_row1_col8, #T_82b93_row1_col10, #T_82b93_row1_col13, #T_82b93_row2_col8, #T_82b93_row2_col10, #T_82b93_row2_col13, #T_82b93_row3_col8, #T_82b93_row3_col10, #T_82b93_row3_col13, #T_82b93_row7_col8, #T_82b93_row7_col10, #T_82b93_row7_col13, #T_82b93_row8_col8, #T_82b93_row8_col10, #T_82b93_row8_col13, #T_82b93_row10_col8, #T_82b93_row10_col10, #T_82b93_row10_col13, #T_82b93_row12_col8, #T_82b93_row12_col10, #T_82b93_row12_col13, #T_82b93_row13_col8, #T_82b93_row13_col10, #T_82b93_row13_col13, #T_82b93_row15_col8, #T_82b93_row15_col10, #T_82b93_row15_col13, #T_82b93_row17_col8, #T_82b93_row17_col10, #T_82b93_row17_col13, #T_82b93_row18_col13, #T_82b93_row19_col8, #T_82b93_row19_col10, #T_82b93_row19_col13 {
+  background-color: rgba(63, 185, 80, 0.18);
+  color: #3fb950;
+}
+#T_82b93_row4_col8, #T_82b93_row4_col10, #T_82b93_row4_col13, #T_82b93_row5_col8, #T_82b93_row5_col10, #T_82b93_row5_col13, #T_82b93_row6_col8, #T_82b93_row6_col10, #T_82b93_row6_col13, #T_82b93_row9_col8, #T_82b93_row9_col10, #T_82b93_row9_col13, #T_82b93_row11_col8, #T_82b93_row11_col10, #T_82b93_row11_col13, #T_82b93_row14_col8, #T_82b93_row14_col10, #T_82b93_row14_col13, #T_82b93_row16_col8, #T_82b93_row16_col10, #T_82b93_row16_col13 {
+  background-color: rgba(248, 81, 73, 0.18);
+  color: #f85149;
+}
+</style>
+<table id="T_82b93" class="ds-table ds-holdings">
+  <thead>
+    <tr>
+      <th id="T_82b93_level0_col0" class="col_heading level0 col0" >Ticker</th>
+      <th id="T_82b93_level0_col1" class="col_heading level0 col1" >Asset · Region</th>
+      <th id="T_82b93_level0_col2" class="col_heading level0 col2" >Weight</th>
+      <th id="T_82b93_level0_col3" class="col_heading level0 col3" >Stmt value (USD)</th>
+      <th id="T_82b93_level0_col4" class="col_heading level0 col4" >Stmt price (USD)</th>
+      <th id="T_82b93_level0_col5" class="col_heading level0 col5" >Stmt date</th>
+      <th id="T_82b93_level0_col6" class="col_heading level0 col6" >Today price (USD)</th>
+      <th id="T_82b93_level0_col7" class="col_heading level0 col7" >Today date</th>
+      <th id="T_82b93_level0_col8" class="col_heading level0 col8" >Δ%</th>
+      <th id="T_82b93_level0_col9" class="col_heading level0 col9" >Today value (USD)</th>
+      <th id="T_82b93_level0_col10" class="col_heading level0 col10" >Δ value (USD)</th>
+      <th id="T_82b93_level0_col11" class="col_heading level0 col11" >Stmt value (SGD)</th>
+      <th id="T_82b93_level0_col12" class="col_heading level0 col12" >Today value (SGD)</th>
+      <th id="T_82b93_level0_col13" class="col_heading level0 col13" >Δ value (SGD)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td id="T_82b93_row0_col0" class="data row0 col0" >ISAC.L</td>
+      <td id="T_82b93_row0_col1" class="data row0 col1" >Equity · Global</td>
+      <td id="T_82b93_row0_col2" class="data row0 col2" >16.20%</td>
+      <td id="T_82b93_row0_col3" class="data row0 col3" >60.19K</td>
+      <td id="T_82b93_row0_col4" class="data row0 col4" >115.6300</td>
+      <td id="T_82b93_row0_col5" class="data row0 col5" >2026-04-30</td>
+      <td id="T_82b93_row0_col6" class="data row0 col6" >121.9700</td>
+      <td id="T_82b93_row0_col7" class="data row0 col7" >2026-05-29</td>
+      <td id="T_82b93_row0_col8" class="data row0 col8" >+5.48%</td>
+      <td id="T_82b93_row0_col9" class="data row0 col9" >63.49K</td>
+      <td id="T_82b93_row0_col10" class="data row0 col10" >+3.30K</td>
+      <td id="T_82b93_row0_col11" class="data row0 col11" >76.63K</td>
+      <td id="T_82b93_row0_col12" class="data row0 col12" >81.04K</td>
+      <td id="T_82b93_row0_col13" class="data row0 col13" >+4.41K</td>
+    </tr>
+    <tr>
+      <td id="T_82b93_row1_col0" class="data row1 col0" >VEU</td>
+      <td id="T_82b93_row1_col1" class="data row1 col1" >Equity · Developed ex-US</td>
+      <td id="T_82b93_row1_col2" class="data row1 col2" >12.60%</td>
+      <td id="T_82b93_row1_col3" class="data row1 col3" >46.82K</td>
+      <td id="T_82b93_row1_col4" class="data row1 col4" >80.9200</td>
+      <td id="T_82b93_row1_col5" class="data row1 col5" >2026-04-30</td>
+      <td id="T_82b93_row1_col6" class="data row1 col6" >84.0000</td>
+      <td id="T_82b93_row1_col7" class="data row1 col7" >2026-05-29</td>
+      <td id="T_82b93_row1_col8" class="data row1 col8" >+3.81%</td>
+      <td id="T_82b93_row1_col9" class="data row1 col9" >48.60K</td>
+      <td id="T_82b93_row1_col10" class="data row1 col10" >+1.78K</td>
+      <td id="T_82b93_row1_col11" class="data row1 col11" >59.60K</td>
+      <td id="T_82b93_row1_col12" class="data row1 col12" >62.03K</td>
+      <td id="T_82b93_row1_col13" class="data row1 col13" >+2.42K</td>
+    </tr>
+    <tr>
+      <td id="T_82b93_row2_col0" class="data row2 col0" >IVV</td>
+      <td id="T_82b93_row2_col1" class="data row2 col1" >Equity · US</td>
+      <td id="T_82b93_row2_col2" class="data row2 col2" >11.80%</td>
+      <td id="T_82b93_row2_col3" class="data row2 col3" >43.84K</td>
+      <td id="T_82b93_row2_col4" class="data row2 col4" >722.0700</td>
+      <td id="T_82b93_row2_col5" class="data row2 col5" >2026-04-30</td>
+      <td id="T_82b93_row2_col6" class="data row2 col6" >760.0500</td>
+      <td id="T_82b93_row2_col7" class="data row2 col7" >2026-05-29</td>
+      <td id="T_82b93_row2_col8" class="data row2 col8" >+5.26%</td>
+      <td id="T_82b93_row2_col9" class="data row2 col9" >46.15K</td>
+      <td id="T_82b93_row2_col10" class="data row2 col10" >+2.31K</td>
+      <td id="T_82b93_row2_col11" class="data row2 col11" >55.82K</td>
+      <td id="T_82b93_row2_col12" class="data row2 col12" >58.90K</td>
+      <td id="T_82b93_row2_col13" class="data row2 col13" >+3.08K</td>
+    </tr>
+    <tr>
+      <td id="T_82b93_row3_col0" class="data row3 col0" >XLK</td>
+      <td id="T_82b93_row3_col1" class="data row3 col1" >Equity · US</td>
+      <td id="T_82b93_row3_col2" class="data row3 col2" >6.20%</td>
+      <td id="T_82b93_row3_col3" class="data row3 col3" >23.04K</td>
+      <td id="T_82b93_row3_col4" class="data row3 col4" >159.5000</td>
+      <td id="T_82b93_row3_col5" class="data row3 col5" >2026-04-30</td>
+      <td id="T_82b93_row3_col6" class="data row3 col6" >191.0200</td>
+      <td id="T_82b93_row3_col7" class="data row3 col7" >2026-05-29</td>
+      <td id="T_82b93_row3_col8" class="data row3 col8" >+19.76%</td>
+      <td id="T_82b93_row3_col9" class="data row3 col9" >27.59K</td>
+      <td id="T_82b93_row3_col10" class="data row3 col10" >+4.55K</td>
+      <td id="T_82b93_row3_col11" class="data row3 col11" >29.33K</td>
+      <td id="T_82b93_row3_col12" class="data row3 col12" >35.21K</td>
+      <td id="T_82b93_row3_col13" class="data row3 col13" >+5.88K</td>
+    </tr>
+    <tr>
+      <td id="T_82b93_row4_col0" class="data row4 col0" >FETH</td>
+      <td id="T_82b93_row4_col1" class="data row4 col1" >Crypto · Global</td>
+      <td id="T_82b93_row4_col2" class="data row4 col2" >6.00%</td>
+      <td id="T_82b93_row4_col3" class="data row4 col3" >22.29K</td>
+      <td id="T_82b93_row4_col4" class="data row4 col4" >22.5300</td>
+      <td id="T_82b93_row4_col5" class="data row4 col5" >2026-04-30</td>
+      <td id="T_82b93_row4_col6" class="data row4 col6" >20.0700</td>
+      <td id="T_82b93_row4_col7" class="data row4 col7" >2026-05-29</td>
+      <td id="T_82b93_row4_col8" class="data row4 col8" >-10.92%</td>
+      <td id="T_82b93_row4_col9" class="data row4 col9" >19.86K</td>
+      <td id="T_82b93_row4_col10" class="data row4 col10" >-2.43K</td>
+      <td id="T_82b93_row4_col11" class="data row4 col11" >28.38K</td>
+      <td id="T_82b93_row4_col12" class="data row4 col12" >25.35K</td>
+      <td id="T_82b93_row4_col13" class="data row4 col13" >-3.04K</td>
+    </tr>
+    <tr>
+      <td id="T_82b93_row5_col0" class="data row5 col0" >FBTC</td>
+      <td id="T_82b93_row5_col1" class="data row5 col1" >Crypto · Global</td>
+      <td id="T_82b93_row5_col2" class="data row5 col2" >6.00%</td>
+      <td id="T_82b93_row5_col3" class="data row5 col3" >22.29K</td>
+      <td id="T_82b93_row5_col4" class="data row5 col4" >66.5300</td>
+      <td id="T_82b93_row5_col5" class="data row5 col5" >2026-04-30</td>
+      <td id="T_82b93_row5_col6" class="data row5 col6" >63.9000</td>
+      <td id="T_82b93_row5_col7" class="data row5 col7" >2026-05-29</td>
+      <td id="T_82b93_row5_col8" class="data row5 col8" >-3.95%</td>
+      <td id="T_82b93_row5_col9" class="data row5 col9" >21.41K</td>
+      <td id="T_82b93_row5_col10" class="data row5 col10" >-881</td>
+      <td id="T_82b93_row5_col11" class="data row5 col11" >28.38K</td>
+      <td id="T_82b93_row5_col12" class="data row5 col12" >27.33K</td>
+      <td id="T_82b93_row5_col13" class="data row5 col13" >-1.05K</td>
+    </tr>
+    <tr>
+      <td id="T_82b93_row6_col0" class="data row6 col0" >GLDM</td>
+      <td id="T_82b93_row6_col1" class="data row6 col1" >Commodity · Global</td>
+      <td id="T_82b93_row6_col2" class="data row6 col2" >5.40%</td>
+      <td id="T_82b93_row6_col3" class="data row6 col3" >20.06K</td>
+      <td id="T_82b93_row6_col4" class="data row6 col4" >91.3700</td>
+      <td id="T_82b93_row6_col5" class="data row6 col5" >2026-04-30</td>
+      <td id="T_82b93_row6_col6" class="data row6 col6" >89.9300</td>
+      <td id="T_82b93_row6_col7" class="data row6 col7" >2026-05-29</td>
+      <td id="T_82b93_row6_col8" class="data row6 col8" >-1.58%</td>
+      <td id="T_82b93_row6_col9" class="data row6 col9" >19.75K</td>
+      <td id="T_82b93_row6_col10" class="data row6 col10" >-316</td>
+      <td id="T_82b93_row6_col11" class="data row6 col11" >25.54K</td>
+      <td id="T_82b93_row6_col12" class="data row6 col12" >25.21K</td>
+      <td id="T_82b93_row6_col13" class="data row6 col13" >-339</td>
+    </tr>
+    <tr>
+      <td id="T_82b93_row7_col0" class="data row7 col0" >RSP</td>
+      <td id="T_82b93_row7_col1" class="data row7 col1" >Equity · US</td>
+      <td id="T_82b93_row7_col2" class="data row7 col2" >5.40%</td>
+      <td id="T_82b93_row7_col3" class="data row7 col3" >20.06K</td>
+      <td id="T_82b93_row7_col4" class="data row7 col4" >203.4400</td>
+      <td id="T_82b93_row7_col5" class="data row7 col5" >2026-04-30</td>
+      <td id="T_82b93_row7_col6" class="data row7 col6" >208.8300</td>
+      <td id="T_82b93_row7_col7" class="data row7 col7" >2026-05-29</td>
+      <td id="T_82b93_row7_col8" class="data row7 col8" >+2.65%</td>
+      <td id="T_82b93_row7_col9" class="data row7 col9" >20.60K</td>
+      <td id="T_82b93_row7_col10" class="data row7 col10" >+532</td>
+      <td id="T_82b93_row7_col11" class="data row7 col11" >25.54K</td>
+      <td id="T_82b93_row7_col12" class="data row7 col12" >26.29K</td>
+      <td id="T_82b93_row7_col13" class="data row7 col13" >+743</td>
+    </tr>
+    <tr>
+      <td id="T_82b93_row8_col0" class="data row8 col0" >DXJ</td>
+      <td id="T_82b93_row8_col1" class="data row8 col1" >Equity · Japan</td>
+      <td id="T_82b93_row8_col2" class="data row8 col2" >4.30%</td>
+      <td id="T_82b93_row8_col3" class="data row8 col3" >15.98K</td>
+      <td id="T_82b93_row8_col4" class="data row8 col4" >162.0700</td>
+      <td id="T_82b93_row8_col5" class="data row8 col5" >2026-04-30</td>
+      <td id="T_82b93_row8_col6" class="data row8 col6" >171.5200</td>
+      <td id="T_82b93_row8_col7" class="data row8 col7" >2026-05-29</td>
+      <td id="T_82b93_row8_col8" class="data row8 col8" >+5.83%</td>
+      <td id="T_82b93_row8_col9" class="data row8 col9" >16.91K</td>
+      <td id="T_82b93_row8_col10" class="data row8 col10" >+932</td>
+      <td id="T_82b93_row8_col11" class="data row8 col11" >20.34K</td>
+      <td id="T_82b93_row8_col12" class="data row8 col12" >21.58K</td>
+      <td id="T_82b93_row8_col13" class="data row8 col13" >+1.24K</td>
+    </tr>
+    <tr>
+      <td id="T_82b93_row9_col0" class="data row9 col0" >XLP</td>
+      <td id="T_82b93_row9_col1" class="data row9 col1" >Equity · US</td>
+      <td id="T_82b93_row9_col2" class="data row9 col2" >4.10%</td>
+      <td id="T_82b93_row9_col3" class="data row9 col3" >15.23K</td>
+      <td id="T_82b93_row9_col4" class="data row9 col4" >84.3100</td>
+      <td id="T_82b93_row9_col5" class="data row9 col5" >2026-04-30</td>
+      <td id="T_82b93_row9_col6" class="data row9 col6" >82.9100</td>
+      <td id="T_82b93_row9_col7" class="data row9 col7" >2026-05-29</td>
+      <td id="T_82b93_row9_col8" class="data row9 col8" >-1.66%</td>
+      <td id="T_82b93_row9_col9" class="data row9 col9" >14.98K</td>
+      <td id="T_82b93_row9_col10" class="data row9 col10" >-253</td>
+      <td id="T_82b93_row9_col11" class="data row9 col11" >19.40K</td>
+      <td id="T_82b93_row9_col12" class="data row9 col12" >19.12K</td>
+      <td id="T_82b93_row9_col13" class="data row9 col13" >-274</td>
+    </tr>
+    <tr>
+      <td id="T_82b93_row10_col0" class="data row10 col0" >SPEM</td>
+      <td id="T_82b93_row10_col1" class="data row10 col1" >Equity · Emerging Markets</td>
+      <td id="T_82b93_row10_col2" class="data row10 col2" >4.00%</td>
+      <td id="T_82b93_row10_col3" class="data row10 col3" >14.86K</td>
+      <td id="T_82b93_row10_col4" class="data row10 col4" >51.2400</td>
+      <td id="T_82b93_row10_col5" class="data row10 col5" >2026-04-30</td>
+      <td id="T_82b93_row10_col6" class="data row10 col6" >52.3300</td>
+      <td id="T_82b93_row10_col7" class="data row10 col7" >2026-05-29</td>
+      <td id="T_82b93_row10_col8" class="data row10 col8" >+2.13%</td>
+      <td id="T_82b93_row10_col9" class="data row10 col9" >15.18K</td>
+      <td id="T_82b93_row10_col10" class="data row10 col10" >+316</td>
+      <td id="T_82b93_row10_col11" class="data row10 col11" >18.92K</td>
+      <td id="T_82b93_row10_col12" class="data row10 col12" >19.37K</td>
+      <td id="T_82b93_row10_col13" class="data row10 col13" >+451</td>
+    </tr>
+    <tr>
+      <td id="T_82b93_row11_col0" class="data row11 col0" >XLI</td>
+      <td id="T_82b93_row11_col1" class="data row11 col1" >Equity · US</td>
+      <td id="T_82b93_row11_col2" class="data row11 col2" >3.30%</td>
+      <td id="T_82b93_row11_col3" class="data row11 col3" >12.26K</td>
+      <td id="T_82b93_row11_col4" class="data row11 col4" >174.5800</td>
+      <td id="T_82b93_row11_col5" class="data row11 col5" >2026-04-30</td>
+      <td id="T_82b93_row11_col6" class="data row11 col6" >173.1300</td>
+      <td id="T_82b93_row11_col7" class="data row11 col7" >2026-05-29</td>
+      <td id="T_82b93_row11_col8" class="data row11 col8" >-0.83%</td>
+      <td id="T_82b93_row11_col9" class="data row11 col9" >12.16K</td>
+      <td id="T_82b93_row11_col10" class="data row11 col10" >-102</td>
+      <td id="T_82b93_row11_col11" class="data row11 col11" >15.61K</td>
+      <td id="T_82b93_row11_col12" class="data row11 col12" >15.52K</td>
+      <td id="T_82b93_row11_col13" class="data row11 col13" >-91</td>
+    </tr>
+    <tr>
+      <td id="T_82b93_row12_col0" class="data row12 col0" >XLV</td>
+      <td id="T_82b93_row12_col1" class="data row12 col1" >Equity · US</td>
+      <td id="T_82b93_row12_col2" class="data row12 col2" >3.20%</td>
+      <td id="T_82b93_row12_col3" class="data row12 col3" >11.89K</td>
+      <td id="T_82b93_row12_col4" class="data row12 col4" >145.9900</td>
+      <td id="T_82b93_row12_col5" class="data row12 col5" >2026-04-30</td>
+      <td id="T_82b93_row12_col6" class="data row12 col6" >149.4700</td>
+      <td id="T_82b93_row12_col7" class="data row12 col7" >2026-05-29</td>
+      <td id="T_82b93_row12_col8" class="data row12 col8" >+2.38%</td>
+      <td id="T_82b93_row12_col9" class="data row12 col9" >12.17K</td>
+      <td id="T_82b93_row12_col10" class="data row12 col10" >+283</td>
+      <td id="T_82b93_row12_col11" class="data row12 col11" >15.14K</td>
+      <td id="T_82b93_row12_col12" class="data row12 col12" >15.54K</td>
+      <td id="T_82b93_row12_col13" class="data row12 col13" >+400</td>
+    </tr>
+    <tr>
+      <td id="T_82b93_row13_col0" class="data row13 col0" >PPA</td>
+      <td id="T_82b93_row13_col1" class="data row13 col1" >Equity · US</td>
+      <td id="T_82b93_row13_col2" class="data row13 col2" >2.60%</td>
+      <td id="T_82b93_row13_col3" class="data row13 col3" >9.66K</td>
+      <td id="T_82b93_row13_col4" class="data row13 col4" >167.4500</td>
+      <td id="T_82b93_row13_col5" class="data row13 col5" >2026-04-30</td>
+      <td id="T_82b93_row13_col6" class="data row13 col6" >177.5900</td>
+      <td id="T_82b93_row13_col7" class="data row13 col7" >2026-05-29</td>
+      <td id="T_82b93_row13_col8" class="data row13 col8" >+6.06%</td>
+      <td id="T_82b93_row13_col9" class="data row13 col9" >10.25K</td>
+      <td id="T_82b93_row13_col10" class="data row13 col10" >+585</td>
+      <td id="T_82b93_row13_col11" class="data row13 col11" >12.30K</td>
+      <td id="T_82b93_row13_col12" class="data row13 col12" >13.08K</td>
+      <td id="T_82b93_row13_col13" class="data row13 col13" >+778</td>
+    </tr>
+    <tr>
+      <td id="T_82b93_row14_col0" class="data row14 col0" >FLIN</td>
+      <td id="T_82b93_row14_col1" class="data row14 col1" >Equity · India</td>
+      <td id="T_82b93_row14_col2" class="data row14 col2" >2.60%</td>
+      <td id="T_82b93_row14_col3" class="data row14 col3" >9.66K</td>
+      <td id="T_82b93_row14_col4" class="data row14 col4" >35.3700</td>
+      <td id="T_82b93_row14_col5" class="data row14 col5" >2026-04-30</td>
+      <td id="T_82b93_row14_col6" class="data row14 col6" >34.9300</td>
+      <td id="T_82b93_row14_col7" class="data row14 col7" >2026-05-29</td>
+      <td id="T_82b93_row14_col8" class="data row14 col8" >-1.24%</td>
+      <td id="T_82b93_row14_col9" class="data row14 col9" >9.54K</td>
+      <td id="T_82b93_row14_col10" class="data row14 col10" >-120</td>
+      <td id="T_82b93_row14_col11" class="data row14 col11" >12.30K</td>
+      <td id="T_82b93_row14_col12" class="data row14 col12" >12.18K</td>
+      <td id="T_82b93_row14_col13" class="data row14 col13" >-122</td>
+    </tr>
+    <tr>
+      <td id="T_82b93_row15_col0" class="data row15 col0" >XLY</td>
+      <td id="T_82b93_row15_col1" class="data row15 col1" >Equity · US</td>
+      <td id="T_82b93_row15_col2" class="data row15 col2" >1.80%</td>
+      <td id="T_82b93_row15_col3" class="data row15 col3" >6.69K</td>
+      <td id="T_82b93_row15_col4" class="data row15 col4" >118.3500</td>
+      <td id="T_82b93_row15_col5" class="data row15 col5" >2026-04-30</td>
+      <td id="T_82b93_row15_col6" class="data row15 col6" >120.8700</td>
+      <td id="T_82b93_row15_col7" class="data row15 col7" >2026-05-29</td>
+      <td id="T_82b93_row15_col8" class="data row15 col8" >+2.13%</td>
+      <td id="T_82b93_row15_col9" class="data row15 col9" >6.83K</td>
+      <td id="T_82b93_row15_col10" class="data row15 col10" >+142</td>
+      <td id="T_82b93_row15_col11" class="data row15 col11" >8.51K</td>
+      <td id="T_82b93_row15_col12" class="data row15 col12" >8.72K</td>
+      <td id="T_82b93_row15_col13" class="data row15 col13" >+203</td>
+    </tr>
+    <tr>
+      <td id="T_82b93_row16_col0" class="data row16 col0" >XLE</td>
+      <td id="T_82b93_row16_col1" class="data row16 col1" >Equity · US</td>
+      <td id="T_82b93_row16_col2" class="data row16 col2" >1.80%</td>
+      <td id="T_82b93_row16_col3" class="data row16 col3" >6.69K</td>
+      <td id="T_82b93_row16_col4" class="data row16 col4" >59.6500</td>
+      <td id="T_82b93_row16_col5" class="data row16 col5" >2026-04-30</td>
+      <td id="T_82b93_row16_col6" class="data row16 col6" >56.2900</td>
+      <td id="T_82b93_row16_col7" class="data row16 col7" >2026-05-29</td>
+      <td id="T_82b93_row16_col8" class="data row16 col8" >-5.63%</td>
+      <td id="T_82b93_row16_col9" class="data row16 col9" >6.31K</td>
+      <td id="T_82b93_row16_col10" class="data row16 col10" >-377</td>
+      <td id="T_82b93_row16_col11" class="data row16 col11" >8.51K</td>
+      <td id="T_82b93_row16_col12" class="data row16 col12" >8.06K</td>
+      <td id="T_82b93_row16_col13" class="data row16 col13" >-459</td>
+    </tr>
+    <tr>
+      <td id="T_82b93_row17_col0" class="data row17 col0" >BBJP</td>
+      <td id="T_82b93_row17_col1" class="data row17 col1" >Equity · Japan</td>
+      <td id="T_82b93_row17_col2" class="data row17 col2" >1.70%</td>
+      <td id="T_82b93_row17_col3" class="data row17 col3" >6.32K</td>
+      <td id="T_82b93_row17_col4" class="data row17 col4" >72.5100</td>
+      <td id="T_82b93_row17_col5" class="data row17 col5" >2026-04-30</td>
+      <td id="T_82b93_row17_col6" class="data row17 col6" >75.5300</td>
+      <td id="T_82b93_row17_col7" class="data row17 col7" >2026-05-29</td>
+      <td id="T_82b93_row17_col8" class="data row17 col8" >+4.16%</td>
+      <td id="T_82b93_row17_col9" class="data row17 col9" >6.58K</td>
+      <td id="T_82b93_row17_col10" class="data row17 col10" >+263</td>
+      <td id="T_82b93_row17_col11" class="data row17 col11" >8.04K</td>
+      <td id="T_82b93_row17_col12" class="data row17 col12" >8.40K</td>
+      <td id="T_82b93_row17_col13" class="data row17 col13" >+356</td>
+    </tr>
+    <tr>
+      <td id="T_82b93_row18_col0" class="data row18 col0" >CASH_USD</td>
+      <td id="T_82b93_row18_col1" class="data row18 col1" >Cash · US</td>
+      <td id="T_82b93_row18_col2" class="data row18 col2" >1.00%</td>
+      <td id="T_82b93_row18_col3" class="data row18 col3" >3.72K</td>
+      <td id="T_82b93_row18_col4" class="data row18 col4" >—</td>
+      <td id="T_82b93_row18_col5" class="data row18 col5" >2026-04-30</td>
+      <td id="T_82b93_row18_col6" class="data row18 col6" >—</td>
+      <td id="T_82b93_row18_col7" class="data row18 col7" >2026-05-29</td>
+      <td id="T_82b93_row18_col8" class="data row18 col8" >+0.00%</td>
+      <td id="T_82b93_row18_col9" class="data row18 col9" >3.72K</td>
+      <td id="T_82b93_row18_col10" class="data row18 col10" >0</td>
+      <td id="T_82b93_row18_col11" class="data row18 col11" >4.73K</td>
+      <td id="T_82b93_row18_col12" class="data row18 col12" >4.74K</td>
+      <td id="T_82b93_row18_col13" class="data row18 col13" >+12</td>
+    </tr>
+    <tr>
+      <td id="T_82b93_row19_col0" class="data row19 col0" >Total</td>
+      <td id="T_82b93_row19_col1" class="data row19 col1" ></td>
+      <td id="T_82b93_row19_col2" class="data row19 col2" >100.00%</td>
+      <td id="T_82b93_row19_col3" class="data row19 col3" >371.55K</td>
+      <td id="T_82b93_row19_col4" class="data row19 col4" >—</td>
+      <td id="T_82b93_row19_col5" class="data row19 col5" >—</td>
+      <td id="T_82b93_row19_col6" class="data row19 col6" >—</td>
+      <td id="T_82b93_row19_col7" class="data row19 col7" >—</td>
+      <td id="T_82b93_row19_col8" class="data row19 col8" >+2.83%</td>
+      <td id="T_82b93_row19_col9" class="data row19 col9" >382.06K</td>
+      <td id="T_82b93_row19_col10" class="data row19 col10" >+10.51K</td>
+      <td id="T_82b93_row19_col11" class="data row19 col11" >473.06K</td>
+      <td id="T_82b93_row19_col12" class="data row19 col12" >487.66K</td>
+      <td id="T_82b93_row19_col13" class="data row19 col13" >+14.60K</td>
+    </tr>
+  </tbody>
+</table>
+</details>
+<details class="drill"><summary><a href="https://app.stashaway.sg/goal/69b5552e5f0a07fcc8338b8a" target="_blank" rel="noopener" class="port-link">Simple USD</a> · USD 274.20K → <span class="pos">274.85K</span> (<span class="pos">+651 USD / +1.71K SGD, +0.24%</span>) · 3 holdings</summary><style type="text/css">
+#T_d2304 tbody tr:nth-child(4) td {
+  font-weight: 600;
+  border-top: 2px solid #30363d;
+}
+#T_d2304_row0_col8, #T_d2304_row0_col10, #T_d2304_row0_col13, #T_d2304_row1_col13, #T_d2304_row2_col13, #T_d2304_row3_col8, #T_d2304_row3_col10, #T_d2304_row3_col13 {
+  background-color: rgba(63, 185, 80, 0.18);
+  color: #3fb950;
+}
+</style>
+<table id="T_d2304" class="ds-table ds-holdings">
+  <thead>
+    <tr>
+      <th id="T_d2304_level0_col0" class="col_heading level0 col0" >Ticker</th>
+      <th id="T_d2304_level0_col1" class="col_heading level0 col1" >Asset · Region</th>
+      <th id="T_d2304_level0_col2" class="col_heading level0 col2" >Weight</th>
+      <th id="T_d2304_level0_col3" class="col_heading level0 col3" >Stmt value (USD)</th>
+      <th id="T_d2304_level0_col4" class="col_heading level0 col4" >Stmt price (USD)</th>
+      <th id="T_d2304_level0_col5" class="col_heading level0 col5" >Stmt date</th>
+      <th id="T_d2304_level0_col6" class="col_heading level0 col6" >Today price (USD)</th>
+      <th id="T_d2304_level0_col7" class="col_heading level0 col7" >Today date</th>
+      <th id="T_d2304_level0_col8" class="col_heading level0 col8" >Δ%</th>
+      <th id="T_d2304_level0_col9" class="col_heading level0 col9" >Today value (USD)</th>
+      <th id="T_d2304_level0_col10" class="col_heading level0 col10" >Δ value (USD)</th>
+      <th id="T_d2304_level0_col11" class="col_heading level0 col11" >Stmt value (SGD)</th>
+      <th id="T_d2304_level0_col12" class="col_heading level0 col12" >Today value (SGD)</th>
+      <th id="T_d2304_level0_col13" class="col_heading level0 col13" >Δ value (SGD)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td id="T_d2304_row0_col0" class="data row0 col0" >BB3M.L</td>
+      <td id="T_d2304_row0_col1" class="data row0 col1" >Cash · US</td>
+      <td id="T_d2304_row0_col2" class="data row0 col2" >100.00%</td>
+      <td id="T_d2304_row0_col3" class="data row0 col3" >274.20K</td>
+      <td id="T_d2304_row0_col4" class="data row0 col4" >117.9000</td>
+      <td id="T_d2304_row0_col5" class="data row0 col5" >2026-04-30</td>
+      <td id="T_d2304_row0_col6" class="data row0 col6" >118.1800</td>
+      <td id="T_d2304_row0_col7" class="data row0 col7" >2026-05-29</td>
+      <td id="T_d2304_row0_col8" class="data row0 col8" >+0.24%</td>
+      <td id="T_d2304_row0_col9" class="data row0 col9" >274.85K</td>
+      <td id="T_d2304_row0_col10" class="data row0 col10" >+651</td>
+      <td id="T_d2304_row0_col11" class="data row0 col11" >349.11K</td>
+      <td id="T_d2304_row0_col12" class="data row0 col12" >350.82K</td>
+      <td id="T_d2304_row0_col13" class="data row0 col13" >+1.71K</td>
+    </tr>
+    <tr>
+      <td id="T_d2304_row1_col0" class="data row1 col0" >CASH_USD</td>
+      <td id="T_d2304_row1_col1" class="data row1 col1" >Cash · US</td>
+      <td id="T_d2304_row1_col2" class="data row1 col2" >0.00%</td>
+      <td id="T_d2304_row1_col3" class="data row1 col3" >1</td>
+      <td id="T_d2304_row1_col4" class="data row1 col4" >—</td>
+      <td id="T_d2304_row1_col5" class="data row1 col5" >2026-04-30</td>
+      <td id="T_d2304_row1_col6" class="data row1 col6" >—</td>
+      <td id="T_d2304_row1_col7" class="data row1 col7" >2026-05-29</td>
+      <td id="T_d2304_row1_col8" class="data row1 col8" >+0.00%</td>
+      <td id="T_d2304_row1_col9" class="data row1 col9" >1</td>
+      <td id="T_d2304_row1_col10" class="data row1 col10" >0</td>
+      <td id="T_d2304_row1_col11" class="data row1 col11" >1</td>
+      <td id="T_d2304_row1_col12" class="data row1 col12" >1</td>
+      <td id="T_d2304_row1_col13" class="data row1 col13" >+0</td>
+    </tr>
+    <tr>
+      <td id="T_d2304_row2_col0" class="data row2 col0" >CASH_SGD</td>
+      <td id="T_d2304_row2_col1" class="data row2 col1" >Cash · Singapore</td>
+      <td id="T_d2304_row2_col2" class="data row2 col2" >0.00%</td>
+      <td id="T_d2304_row2_col3" class="data row2 col3" >0</td>
+      <td id="T_d2304_row2_col4" class="data row2 col4" >—</td>
+      <td id="T_d2304_row2_col5" class="data row2 col5" >2026-04-30</td>
+      <td id="T_d2304_row2_col6" class="data row2 col6" >—</td>
+      <td id="T_d2304_row2_col7" class="data row2 col7" >2026-05-29</td>
+      <td id="T_d2304_row2_col8" class="data row2 col8" >+0.00%</td>
+      <td id="T_d2304_row2_col9" class="data row2 col9" >0</td>
+      <td id="T_d2304_row2_col10" class="data row2 col10" >0</td>
+      <td id="T_d2304_row2_col11" class="data row2 col11" >0</td>
+      <td id="T_d2304_row2_col12" class="data row2 col12" >0</td>
+      <td id="T_d2304_row2_col13" class="data row2 col13" >+0</td>
+    </tr>
+    <tr>
+      <td id="T_d2304_row3_col0" class="data row3 col0" >Total</td>
+      <td id="T_d2304_row3_col1" class="data row3 col1" ></td>
+      <td id="T_d2304_row3_col2" class="data row3 col2" >100.00%</td>
+      <td id="T_d2304_row3_col3" class="data row3 col3" >274.20K</td>
+      <td id="T_d2304_row3_col4" class="data row3 col4" >—</td>
+      <td id="T_d2304_row3_col5" class="data row3 col5" >—</td>
+      <td id="T_d2304_row3_col6" class="data row3 col6" >—</td>
+      <td id="T_d2304_row3_col7" class="data row3 col7" >—</td>
+      <td id="T_d2304_row3_col8" class="data row3 col8" >+0.24%</td>
+      <td id="T_d2304_row3_col9" class="data row3 col9" >274.85K</td>
+      <td id="T_d2304_row3_col10" class="data row3 col10" >+651</td>
+      <td id="T_d2304_row3_col11" class="data row3 col11" >349.11K</td>
+      <td id="T_d2304_row3_col12" class="data row3 col12" >350.82K</td>
+      <td id="T_d2304_row3_col13" class="data row3 col13" >+1.71K</td>
+    </tr>
+  </tbody>
+</table>
+</details>
+<details class="drill"><summary><a href="https://app.stashaway.sg/goal/652e600df02c35a5183a871e" target="_blank" rel="noopener" class="port-link">General SRS</a> · USD 101.30K → <span class="pos">104.17K</span> (<span class="pos">+2.87K USD / +3.98K SGD, +2.83%</span>) · 19 holdings</summary><style type="text/css">
+#T_ff442 tbody tr:nth-child(20) td {
+  font-weight: 600;
+  border-top: 2px solid #30363d;
+}
+#T_ff442_row0_col8, #T_ff442_row0_col10, #T_ff442_row0_col13, #T_ff442_row1_col8, #T_ff442_row1_col10, #T_ff442_row1_col13, #T_ff442_row2_col8, #T_ff442_row2_col10, #T_ff442_row2_col13, #T_ff442_row3_col8, #T_ff442_row3_col10, #T_ff442_row3_col13, #T_ff442_row7_col8, #T_ff442_row7_col10, #T_ff442_row7_col13, #T_ff442_row8_col8, #T_ff442_row8_col10, #T_ff442_row8_col13, #T_ff442_row10_col8, #T_ff442_row10_col10, #T_ff442_row10_col13, #T_ff442_row12_col8, #T_ff442_row12_col10, #T_ff442_row12_col13, #T_ff442_row13_col8, #T_ff442_row13_col10, #T_ff442_row13_col13, #T_ff442_row15_col8, #T_ff442_row15_col10, #T_ff442_row15_col13, #T_ff442_row17_col8, #T_ff442_row17_col10, #T_ff442_row17_col13, #T_ff442_row18_col13, #T_ff442_row19_col8, #T_ff442_row19_col10, #T_ff442_row19_col13 {
+  background-color: rgba(63, 185, 80, 0.18);
+  color: #3fb950;
+}
+#T_ff442_row4_col8, #T_ff442_row4_col10, #T_ff442_row4_col13, #T_ff442_row5_col8, #T_ff442_row5_col10, #T_ff442_row5_col13, #T_ff442_row6_col8, #T_ff442_row6_col10, #T_ff442_row6_col13, #T_ff442_row9_col8, #T_ff442_row9_col10, #T_ff442_row9_col13, #T_ff442_row11_col8, #T_ff442_row11_col10, #T_ff442_row11_col13, #T_ff442_row14_col8, #T_ff442_row14_col10, #T_ff442_row14_col13, #T_ff442_row16_col8, #T_ff442_row16_col10, #T_ff442_row16_col13 {
+  background-color: rgba(248, 81, 73, 0.18);
+  color: #f85149;
+}
+</style>
+<table id="T_ff442" class="ds-table ds-holdings">
+  <thead>
+    <tr>
+      <th id="T_ff442_level0_col0" class="col_heading level0 col0" >Ticker</th>
+      <th id="T_ff442_level0_col1" class="col_heading level0 col1" >Asset · Region</th>
+      <th id="T_ff442_level0_col2" class="col_heading level0 col2" >Weight</th>
+      <th id="T_ff442_level0_col3" class="col_heading level0 col3" >Stmt value (USD)</th>
+      <th id="T_ff442_level0_col4" class="col_heading level0 col4" >Stmt price (USD)</th>
+      <th id="T_ff442_level0_col5" class="col_heading level0 col5" >Stmt date</th>
+      <th id="T_ff442_level0_col6" class="col_heading level0 col6" >Today price (USD)</th>
+      <th id="T_ff442_level0_col7" class="col_heading level0 col7" >Today date</th>
+      <th id="T_ff442_level0_col8" class="col_heading level0 col8" >Δ%</th>
+      <th id="T_ff442_level0_col9" class="col_heading level0 col9" >Today value (USD)</th>
+      <th id="T_ff442_level0_col10" class="col_heading level0 col10" >Δ value (USD)</th>
+      <th id="T_ff442_level0_col11" class="col_heading level0 col11" >Stmt value (SGD)</th>
+      <th id="T_ff442_level0_col12" class="col_heading level0 col12" >Today value (SGD)</th>
+      <th id="T_ff442_level0_col13" class="col_heading level0 col13" >Δ value (SGD)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td id="T_ff442_row0_col0" class="data row0 col0" >ISAC.L</td>
+      <td id="T_ff442_row0_col1" class="data row0 col1" >Equity · Global</td>
+      <td id="T_ff442_row0_col2" class="data row0 col2" >16.20%</td>
+      <td id="T_ff442_row0_col3" class="data row0 col3" >16.41K</td>
+      <td id="T_ff442_row0_col4" class="data row0 col4" >115.6300</td>
+      <td id="T_ff442_row0_col5" class="data row0 col5" >2026-04-30</td>
+      <td id="T_ff442_row0_col6" class="data row0 col6" >121.9700</td>
+      <td id="T_ff442_row0_col7" class="data row0 col7" >2026-05-29</td>
+      <td id="T_ff442_row0_col8" class="data row0 col8" >+5.48%</td>
+      <td id="T_ff442_row0_col9" class="data row0 col9" >17.31K</td>
+      <td id="T_ff442_row0_col10" class="data row0 col10" >+900</td>
+      <td id="T_ff442_row0_col11" class="data row0 col11" >20.89K</td>
+      <td id="T_ff442_row0_col12" class="data row0 col12" >22.09K</td>
+      <td id="T_ff442_row0_col13" class="data row0 col13" >+1.20K</td>
+    </tr>
+    <tr>
+      <td id="T_ff442_row1_col0" class="data row1 col0" >VEU</td>
+      <td id="T_ff442_row1_col1" class="data row1 col1" >Equity · Developed ex-US</td>
+      <td id="T_ff442_row1_col2" class="data row1 col2" >12.60%</td>
+      <td id="T_ff442_row1_col3" class="data row1 col3" >12.76K</td>
+      <td id="T_ff442_row1_col4" class="data row1 col4" >80.9200</td>
+      <td id="T_ff442_row1_col5" class="data row1 col5" >2026-04-30</td>
+      <td id="T_ff442_row1_col6" class="data row1 col6" >84.0000</td>
+      <td id="T_ff442_row1_col7" class="data row1 col7" >2026-05-29</td>
+      <td id="T_ff442_row1_col8" class="data row1 col8" >+3.81%</td>
+      <td id="T_ff442_row1_col9" class="data row1 col9" >13.25K</td>
+      <td id="T_ff442_row1_col10" class="data row1 col10" >+486</td>
+      <td id="T_ff442_row1_col11" class="data row1 col11" >16.25K</td>
+      <td id="T_ff442_row1_col12" class="data row1 col12" >16.91K</td>
+      <td id="T_ff442_row1_col13" class="data row1 col13" >+661</td>
+    </tr>
+    <tr>
+      <td id="T_ff442_row2_col0" class="data row2 col0" >IVV</td>
+      <td id="T_ff442_row2_col1" class="data row2 col1" >Equity · US</td>
+      <td id="T_ff442_row2_col2" class="data row2 col2" >11.80%</td>
+      <td id="T_ff442_row2_col3" class="data row2 col3" >11.95K</td>
+      <td id="T_ff442_row2_col4" class="data row2 col4" >722.0700</td>
+      <td id="T_ff442_row2_col5" class="data row2 col5" >2026-04-30</td>
+      <td id="T_ff442_row2_col6" class="data row2 col6" >760.0500</td>
+      <td id="T_ff442_row2_col7" class="data row2 col7" >2026-05-29</td>
+      <td id="T_ff442_row2_col8" class="data row2 col8" >+5.26%</td>
+      <td id="T_ff442_row2_col9" class="data row2 col9" >12.58K</td>
+      <td id="T_ff442_row2_col10" class="data row2 col10" >+629</td>
+      <td id="T_ff442_row2_col11" class="data row2 col11" >15.22K</td>
+      <td id="T_ff442_row2_col12" class="data row2 col12" >16.06K</td>
+      <td id="T_ff442_row2_col13" class="data row2 col13" >+841</td>
+    </tr>
+    <tr>
+      <td id="T_ff442_row3_col0" class="data row3 col0" >XLK</td>
+      <td id="T_ff442_row3_col1" class="data row3 col1" >Equity · US</td>
+      <td id="T_ff442_row3_col2" class="data row3 col2" >6.20%</td>
+      <td id="T_ff442_row3_col3" class="data row3 col3" >6.28K</td>
+      <td id="T_ff442_row3_col4" class="data row3 col4" >159.5000</td>
+      <td id="T_ff442_row3_col5" class="data row3 col5" >2026-04-30</td>
+      <td id="T_ff442_row3_col6" class="data row3 col6" >191.0200</td>
+      <td id="T_ff442_row3_col7" class="data row3 col7" >2026-05-29</td>
+      <td id="T_ff442_row3_col8" class="data row3 col8" >+19.76%</td>
+      <td id="T_ff442_row3_col9" class="data row3 col9" >7.52K</td>
+      <td id="T_ff442_row3_col10" class="data row3 col10" >+1.24K</td>
+      <td id="T_ff442_row3_col11" class="data row3 col11" >8.00K</td>
+      <td id="T_ff442_row3_col12" class="data row3 col12" >9.60K</td>
+      <td id="T_ff442_row3_col13" class="data row3 col13" >+1.60K</td>
+    </tr>
+    <tr>
+      <td id="T_ff442_row4_col0" class="data row4 col0" >FETH</td>
+      <td id="T_ff442_row4_col1" class="data row4 col1" >Crypto · Global</td>
+      <td id="T_ff442_row4_col2" class="data row4 col2" >6.00%</td>
+      <td id="T_ff442_row4_col3" class="data row4 col3" >6.08K</td>
+      <td id="T_ff442_row4_col4" class="data row4 col4" >22.5300</td>
+      <td id="T_ff442_row4_col5" class="data row4 col5" >2026-04-30</td>
+      <td id="T_ff442_row4_col6" class="data row4 col6" >20.0700</td>
+      <td id="T_ff442_row4_col7" class="data row4 col7" >2026-05-29</td>
+      <td id="T_ff442_row4_col8" class="data row4 col8" >-10.92%</td>
+      <td id="T_ff442_row4_col9" class="data row4 col9" >5.41K</td>
+      <td id="T_ff442_row4_col10" class="data row4 col10" >-664</td>
+      <td id="T_ff442_row4_col11" class="data row4 col11" >7.74K</td>
+      <td id="T_ff442_row4_col12" class="data row4 col12" >6.91K</td>
+      <td id="T_ff442_row4_col13" class="data row4 col13" >-828</td>
+    </tr>
+    <tr>
+      <td id="T_ff442_row5_col0" class="data row5 col0" >FBTC</td>
+      <td id="T_ff442_row5_col1" class="data row5 col1" >Crypto · Global</td>
+      <td id="T_ff442_row5_col2" class="data row5 col2" >6.00%</td>
+      <td id="T_ff442_row5_col3" class="data row5 col3" >6.08K</td>
+      <td id="T_ff442_row5_col4" class="data row5 col4" >66.5300</td>
+      <td id="T_ff442_row5_col5" class="data row5 col5" >2026-04-30</td>
+      <td id="T_ff442_row5_col6" class="data row5 col6" >63.9000</td>
+      <td id="T_ff442_row5_col7" class="data row5 col7" >2026-05-29</td>
+      <td id="T_ff442_row5_col8" class="data row5 col8" >-3.95%</td>
+      <td id="T_ff442_row5_col9" class="data row5 col9" >5.84K</td>
+      <td id="T_ff442_row5_col10" class="data row5 col10" >-240</td>
+      <td id="T_ff442_row5_col11" class="data row5 col11" >7.74K</td>
+      <td id="T_ff442_row5_col12" class="data row5 col12" >7.45K</td>
+      <td id="T_ff442_row5_col13" class="data row5 col13" >-287</td>
+    </tr>
+    <tr>
+      <td id="T_ff442_row6_col0" class="data row6 col0" >GLDM</td>
+      <td id="T_ff442_row6_col1" class="data row6 col1" >Commodity · Global</td>
+      <td id="T_ff442_row6_col2" class="data row6 col2" >5.40%</td>
+      <td id="T_ff442_row6_col3" class="data row6 col3" >5.47K</td>
+      <td id="T_ff442_row6_col4" class="data row6 col4" >91.3700</td>
+      <td id="T_ff442_row6_col5" class="data row6 col5" >2026-04-30</td>
+      <td id="T_ff442_row6_col6" class="data row6 col6" >89.9300</td>
+      <td id="T_ff442_row6_col7" class="data row6 col7" >2026-05-29</td>
+      <td id="T_ff442_row6_col8" class="data row6 col8" >-1.58%</td>
+      <td id="T_ff442_row6_col9" class="data row6 col9" >5.38K</td>
+      <td id="T_ff442_row6_col10" class="data row6 col10" >-86</td>
+      <td id="T_ff442_row6_col11" class="data row6 col11" >6.96K</td>
+      <td id="T_ff442_row6_col12" class="data row6 col12" >6.87K</td>
+      <td id="T_ff442_row6_col13" class="data row6 col13" >-93</td>
+    </tr>
+    <tr>
+      <td id="T_ff442_row7_col0" class="data row7 col0" >RSP</td>
+      <td id="T_ff442_row7_col1" class="data row7 col1" >Equity · US</td>
+      <td id="T_ff442_row7_col2" class="data row7 col2" >5.40%</td>
+      <td id="T_ff442_row7_col3" class="data row7 col3" >5.47K</td>
+      <td id="T_ff442_row7_col4" class="data row7 col4" >203.4400</td>
+      <td id="T_ff442_row7_col5" class="data row7 col5" >2026-04-30</td>
+      <td id="T_ff442_row7_col6" class="data row7 col6" >208.8300</td>
+      <td id="T_ff442_row7_col7" class="data row7 col7" >2026-05-29</td>
+      <td id="T_ff442_row7_col8" class="data row7 col8" >+2.65%</td>
+      <td id="T_ff442_row7_col9" class="data row7 col9" >5.62K</td>
+      <td id="T_ff442_row7_col10" class="data row7 col10" >+145</td>
+      <td id="T_ff442_row7_col11" class="data row7 col11" >6.96K</td>
+      <td id="T_ff442_row7_col12" class="data row7 col12" >7.17K</td>
+      <td id="T_ff442_row7_col13" class="data row7 col13" >+202</td>
+    </tr>
+    <tr>
+      <td id="T_ff442_row8_col0" class="data row8 col0" >DXJ</td>
+      <td id="T_ff442_row8_col1" class="data row8 col1" >Equity · Japan</td>
+      <td id="T_ff442_row8_col2" class="data row8 col2" >4.30%</td>
+      <td id="T_ff442_row8_col3" class="data row8 col3" >4.36K</td>
+      <td id="T_ff442_row8_col4" class="data row8 col4" >162.0700</td>
+      <td id="T_ff442_row8_col5" class="data row8 col5" >2026-04-30</td>
+      <td id="T_ff442_row8_col6" class="data row8 col6" >171.5200</td>
+      <td id="T_ff442_row8_col7" class="data row8 col7" >2026-05-29</td>
+      <td id="T_ff442_row8_col8" class="data row8 col8" >+5.83%</td>
+      <td id="T_ff442_row8_col9" class="data row8 col9" >4.61K</td>
+      <td id="T_ff442_row8_col10" class="data row8 col10" >+254</td>
+      <td id="T_ff442_row8_col11" class="data row8 col11" >5.55K</td>
+      <td id="T_ff442_row8_col12" class="data row8 col12" >5.88K</td>
+      <td id="T_ff442_row8_col13" class="data row8 col13" >+338</td>
+    </tr>
+    <tr>
+      <td id="T_ff442_row9_col0" class="data row9 col0" >XLP</td>
+      <td id="T_ff442_row9_col1" class="data row9 col1" >Equity · US</td>
+      <td id="T_ff442_row9_col2" class="data row9 col2" >4.10%</td>
+      <td id="T_ff442_row9_col3" class="data row9 col3" >4.15K</td>
+      <td id="T_ff442_row9_col4" class="data row9 col4" >84.3100</td>
+      <td id="T_ff442_row9_col5" class="data row9 col5" >2026-04-30</td>
+      <td id="T_ff442_row9_col6" class="data row9 col6" >82.9100</td>
+      <td id="T_ff442_row9_col7" class="data row9 col7" >2026-05-29</td>
+      <td id="T_ff442_row9_col8" class="data row9 col8" >-1.66%</td>
+      <td id="T_ff442_row9_col9" class="data row9 col9" >4.08K</td>
+      <td id="T_ff442_row9_col10" class="data row9 col10" >-69</td>
+      <td id="T_ff442_row9_col11" class="data row9 col11" >5.29K</td>
+      <td id="T_ff442_row9_col12" class="data row9 col12" >5.21K</td>
+      <td id="T_ff442_row9_col13" class="data row9 col13" >-75</td>
+    </tr>
+    <tr>
+      <td id="T_ff442_row10_col0" class="data row10 col0" >SPEM</td>
+      <td id="T_ff442_row10_col1" class="data row10 col1" >Equity · Emerging Markets</td>
+      <td id="T_ff442_row10_col2" class="data row10 col2" >4.00%</td>
+      <td id="T_ff442_row10_col3" class="data row10 col3" >4.05K</td>
+      <td id="T_ff442_row10_col4" class="data row10 col4" >51.2400</td>
+      <td id="T_ff442_row10_col5" class="data row10 col5" >2026-04-30</td>
+      <td id="T_ff442_row10_col6" class="data row10 col6" >52.3300</td>
+      <td id="T_ff442_row10_col7" class="data row10 col7" >2026-05-29</td>
+      <td id="T_ff442_row10_col8" class="data row10 col8" >+2.13%</td>
+      <td id="T_ff442_row10_col9" class="data row10 col9" >4.14K</td>
+      <td id="T_ff442_row10_col10" class="data row10 col10" >+86</td>
+      <td id="T_ff442_row10_col11" class="data row10 col11" >5.16K</td>
+      <td id="T_ff442_row10_col12" class="data row10 col12" >5.28K</td>
+      <td id="T_ff442_row10_col13" class="data row10 col13" >+123</td>
+    </tr>
+    <tr>
+      <td id="T_ff442_row11_col0" class="data row11 col0" >XLI</td>
+      <td id="T_ff442_row11_col1" class="data row11 col1" >Equity · US</td>
+      <td id="T_ff442_row11_col2" class="data row11 col2" >3.30%</td>
+      <td id="T_ff442_row11_col3" class="data row11 col3" >3.34K</td>
+      <td id="T_ff442_row11_col4" class="data row11 col4" >174.5800</td>
+      <td id="T_ff442_row11_col5" class="data row11 col5" >2026-04-30</td>
+      <td id="T_ff442_row11_col6" class="data row11 col6" >173.1300</td>
+      <td id="T_ff442_row11_col7" class="data row11 col7" >2026-05-29</td>
+      <td id="T_ff442_row11_col8" class="data row11 col8" >-0.83%</td>
+      <td id="T_ff442_row11_col9" class="data row11 col9" >3.32K</td>
+      <td id="T_ff442_row11_col10" class="data row11 col10" >-28</td>
+      <td id="T_ff442_row11_col11" class="data row11 col11" >4.26K</td>
+      <td id="T_ff442_row11_col12" class="data row11 col12" >4.23K</td>
+      <td id="T_ff442_row11_col13" class="data row11 col13" >-25</td>
+    </tr>
+    <tr>
+      <td id="T_ff442_row12_col0" class="data row12 col0" >XLV</td>
+      <td id="T_ff442_row12_col1" class="data row12 col1" >Equity · US</td>
+      <td id="T_ff442_row12_col2" class="data row12 col2" >3.20%</td>
+      <td id="T_ff442_row12_col3" class="data row12 col3" >3.24K</td>
+      <td id="T_ff442_row12_col4" class="data row12 col4" >145.9900</td>
+      <td id="T_ff442_row12_col5" class="data row12 col5" >2026-04-30</td>
+      <td id="T_ff442_row12_col6" class="data row12 col6" >149.4700</td>
+      <td id="T_ff442_row12_col7" class="data row12 col7" >2026-05-29</td>
+      <td id="T_ff442_row12_col8" class="data row12 col8" >+2.38%</td>
+      <td id="T_ff442_row12_col9" class="data row12 col9" >3.32K</td>
+      <td id="T_ff442_row12_col10" class="data row12 col10" >+77</td>
+      <td id="T_ff442_row12_col11" class="data row12 col11" >4.13K</td>
+      <td id="T_ff442_row12_col12" class="data row12 col12" >4.24K</td>
+      <td id="T_ff442_row12_col13" class="data row12 col13" >+109</td>
+    </tr>
+    <tr>
+      <td id="T_ff442_row13_col0" class="data row13 col0" >PPA</td>
+      <td id="T_ff442_row13_col1" class="data row13 col1" >Equity · US</td>
+      <td id="T_ff442_row13_col2" class="data row13 col2" >2.60%</td>
+      <td id="T_ff442_row13_col3" class="data row13 col3" >2.63K</td>
+      <td id="T_ff442_row13_col4" class="data row13 col4" >167.4500</td>
+      <td id="T_ff442_row13_col5" class="data row13 col5" >2026-04-30</td>
+      <td id="T_ff442_row13_col6" class="data row13 col6" >177.5900</td>
+      <td id="T_ff442_row13_col7" class="data row13 col7" >2026-05-29</td>
+      <td id="T_ff442_row13_col8" class="data row13 col8" >+6.06%</td>
+      <td id="T_ff442_row13_col9" class="data row13 col9" >2.79K</td>
+      <td id="T_ff442_row13_col10" class="data row13 col10" >+159</td>
+      <td id="T_ff442_row13_col11" class="data row13 col11" >3.35K</td>
+      <td id="T_ff442_row13_col12" class="data row13 col12" >3.57K</td>
+      <td id="T_ff442_row13_col13" class="data row13 col13" >+212</td>
+    </tr>
+    <tr>
+      <td id="T_ff442_row14_col0" class="data row14 col0" >FLIN</td>
+      <td id="T_ff442_row14_col1" class="data row14 col1" >Equity · India</td>
+      <td id="T_ff442_row14_col2" class="data row14 col2" >2.60%</td>
+      <td id="T_ff442_row14_col3" class="data row14 col3" >2.63K</td>
+      <td id="T_ff442_row14_col4" class="data row14 col4" >35.3700</td>
+      <td id="T_ff442_row14_col5" class="data row14 col5" >2026-04-30</td>
+      <td id="T_ff442_row14_col6" class="data row14 col6" >34.9300</td>
+      <td id="T_ff442_row14_col7" class="data row14 col7" >2026-05-29</td>
+      <td id="T_ff442_row14_col8" class="data row14 col8" >-1.24%</td>
+      <td id="T_ff442_row14_col9" class="data row14 col9" >2.60K</td>
+      <td id="T_ff442_row14_col10" class="data row14 col10" >-33</td>
+      <td id="T_ff442_row14_col11" class="data row14 col11" >3.35K</td>
+      <td id="T_ff442_row14_col12" class="data row14 col12" >3.32K</td>
+      <td id="T_ff442_row14_col13" class="data row14 col13" >-33</td>
+    </tr>
+    <tr>
+      <td id="T_ff442_row15_col0" class="data row15 col0" >XLY</td>
+      <td id="T_ff442_row15_col1" class="data row15 col1" >Equity · US</td>
+      <td id="T_ff442_row15_col2" class="data row15 col2" >1.80%</td>
+      <td id="T_ff442_row15_col3" class="data row15 col3" >1.82K</td>
+      <td id="T_ff442_row15_col4" class="data row15 col4" >118.3500</td>
+      <td id="T_ff442_row15_col5" class="data row15 col5" >2026-04-30</td>
+      <td id="T_ff442_row15_col6" class="data row15 col6" >120.8700</td>
+      <td id="T_ff442_row15_col7" class="data row15 col7" >2026-05-29</td>
+      <td id="T_ff442_row15_col8" class="data row15 col8" >+2.13%</td>
+      <td id="T_ff442_row15_col9" class="data row15 col9" >1.86K</td>
+      <td id="T_ff442_row15_col10" class="data row15 col10" >+39</td>
+      <td id="T_ff442_row15_col11" class="data row15 col11" >2.32K</td>
+      <td id="T_ff442_row15_col12" class="data row15 col12" >2.38K</td>
+      <td id="T_ff442_row15_col13" class="data row15 col13" >+55</td>
+    </tr>
+    <tr>
+      <td id="T_ff442_row16_col0" class="data row16 col0" >XLE</td>
+      <td id="T_ff442_row16_col1" class="data row16 col1" >Equity · US</td>
+      <td id="T_ff442_row16_col2" class="data row16 col2" >1.80%</td>
+      <td id="T_ff442_row16_col3" class="data row16 col3" >1.82K</td>
+      <td id="T_ff442_row16_col4" class="data row16 col4" >59.6500</td>
+      <td id="T_ff442_row16_col5" class="data row16 col5" >2026-04-30</td>
+      <td id="T_ff442_row16_col6" class="data row16 col6" >56.2900</td>
+      <td id="T_ff442_row16_col7" class="data row16 col7" >2026-05-29</td>
+      <td id="T_ff442_row16_col8" class="data row16 col8" >-5.63%</td>
+      <td id="T_ff442_row16_col9" class="data row16 col9" >1.72K</td>
+      <td id="T_ff442_row16_col10" class="data row16 col10" >-103</td>
+      <td id="T_ff442_row16_col11" class="data row16 col11" >2.32K</td>
+      <td id="T_ff442_row16_col12" class="data row16 col12" >2.20K</td>
+      <td id="T_ff442_row16_col13" class="data row16 col13" >-125</td>
+    </tr>
+    <tr>
+      <td id="T_ff442_row17_col0" class="data row17 col0" >BBJP</td>
+      <td id="T_ff442_row17_col1" class="data row17 col1" >Equity · Japan</td>
+      <td id="T_ff442_row17_col2" class="data row17 col2" >1.70%</td>
+      <td id="T_ff442_row17_col3" class="data row17 col3" >1.72K</td>
+      <td id="T_ff442_row17_col4" class="data row17 col4" >72.5100</td>
+      <td id="T_ff442_row17_col5" class="data row17 col5" >2026-04-30</td>
+      <td id="T_ff442_row17_col6" class="data row17 col6" >75.5300</td>
+      <td id="T_ff442_row17_col7" class="data row17 col7" >2026-05-29</td>
+      <td id="T_ff442_row17_col8" class="data row17 col8" >+4.16%</td>
+      <td id="T_ff442_row17_col9" class="data row17 col9" >1.79K</td>
+      <td id="T_ff442_row17_col10" class="data row17 col10" >+72</td>
+      <td id="T_ff442_row17_col11" class="data row17 col11" >2.19K</td>
+      <td id="T_ff442_row17_col12" class="data row17 col12" >2.29K</td>
+      <td id="T_ff442_row17_col13" class="data row17 col13" >+97</td>
+    </tr>
+    <tr>
+      <td id="T_ff442_row18_col0" class="data row18 col0" >CASH_USD</td>
+      <td id="T_ff442_row18_col1" class="data row18 col1" >Cash · US</td>
+      <td id="T_ff442_row18_col2" class="data row18 col2" >1.00%</td>
+      <td id="T_ff442_row18_col3" class="data row18 col3" >1.01K</td>
+      <td id="T_ff442_row18_col4" class="data row18 col4" >—</td>
+      <td id="T_ff442_row18_col5" class="data row18 col5" >2026-04-30</td>
+      <td id="T_ff442_row18_col6" class="data row18 col6" >—</td>
+      <td id="T_ff442_row18_col7" class="data row18 col7" >2026-05-29</td>
+      <td id="T_ff442_row18_col8" class="data row18 col8" >+0.00%</td>
+      <td id="T_ff442_row18_col9" class="data row18 col9" >1.01K</td>
+      <td id="T_ff442_row18_col10" class="data row18 col10" >0</td>
+      <td id="T_ff442_row18_col11" class="data row18 col11" >1.29K</td>
+      <td id="T_ff442_row18_col12" class="data row18 col12" >1.29K</td>
+      <td id="T_ff442_row18_col13" class="data row18 col13" >+3</td>
+    </tr>
+    <tr>
+      <td id="T_ff442_row19_col0" class="data row19 col0" >Total</td>
+      <td id="T_ff442_row19_col1" class="data row19 col1" ></td>
+      <td id="T_ff442_row19_col2" class="data row19 col2" >100.00%</td>
+      <td id="T_ff442_row19_col3" class="data row19 col3" >101.30K</td>
+      <td id="T_ff442_row19_col4" class="data row19 col4" >—</td>
+      <td id="T_ff442_row19_col5" class="data row19 col5" >—</td>
+      <td id="T_ff442_row19_col6" class="data row19 col6" >—</td>
+      <td id="T_ff442_row19_col7" class="data row19 col7" >—</td>
+      <td id="T_ff442_row19_col8" class="data row19 col8" >+2.83%</td>
+      <td id="T_ff442_row19_col9" class="data row19 col9" >104.17K</td>
+      <td id="T_ff442_row19_col10" class="data row19 col10" >+2.87K</td>
+      <td id="T_ff442_row19_col11" class="data row19 col11" >128.98K</td>
+      <td id="T_ff442_row19_col12" class="data row19 col12" >132.96K</td>
+      <td id="T_ff442_row19_col13" class="data row19 col13" >+3.98K</td>
+    </tr>
+  </tbody>
+</table>
+</details>
+<details class="drill"><summary><a href="https://app.stashaway.sg/goal/66e9b6efc92a6fb1c008eea7" target="_blank" rel="noopener" class="port-link">Guitsa</a> · SGD 72.75K → <span class="pos">72.82K</span> (<span class="pos">+72 SGD, +0.10%</span>) · 3 holdings</summary><style type="text/css">
+#T_3b675 tbody tr:nth-child(4) td {
+  font-weight: 600;
+  border-top: 2px solid #30363d;
+}
+#T_3b675_row0_col8, #T_3b675_row0_col10, #T_3b675_row1_col8, #T_3b675_row1_col10, #T_3b675_row3_col8, #T_3b675_row3_col10 {
+  background-color: rgba(63, 185, 80, 0.18);
+  color: #3fb950;
+}
+</style>
+<table id="T_3b675" class="ds-table ds-holdings">
+  <thead>
+    <tr>
+      <th id="T_3b675_level0_col0" class="col_heading level0 col0" >Ticker</th>
+      <th id="T_3b675_level0_col1" class="col_heading level0 col1" >Asset · Region</th>
+      <th id="T_3b675_level0_col2" class="col_heading level0 col2" >Weight</th>
+      <th id="T_3b675_level0_col3" class="col_heading level0 col3" >Stmt value (SGD)</th>
+      <th id="T_3b675_level0_col4" class="col_heading level0 col4" >Stmt price (SGD)</th>
+      <th id="T_3b675_level0_col5" class="col_heading level0 col5" >Stmt date</th>
+      <th id="T_3b675_level0_col6" class="col_heading level0 col6" >Today price (SGD)</th>
+      <th id="T_3b675_level0_col7" class="col_heading level0 col7" >Today date</th>
+      <th id="T_3b675_level0_col8" class="col_heading level0 col8" >Δ%</th>
+      <th id="T_3b675_level0_col9" class="col_heading level0 col9" >Today value (SGD)</th>
+      <th id="T_3b675_level0_col10" class="col_heading level0 col10" >Δ value (SGD)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td id="T_3b675_row0_col0" class="data row0 col0" >0P0001DB5Z.SI</td>
+      <td id="T_3b675_row0_col1" class="data row0 col1" >Cash · Singapore</td>
+      <td id="T_3b675_row0_col2" class="data row0 col2" >70.00%</td>
+      <td id="T_3b675_row0_col3" class="data row0 col3" >50.93K</td>
+      <td id="T_3b675_row0_col4" class="data row0 col4" >1.1708</td>
+      <td id="T_3b675_row0_col5" class="data row0 col5" >2026-04-30</td>
+      <td id="T_3b675_row0_col6" class="data row0 col6" >1.1720</td>
+      <td id="T_3b675_row0_col7" class="data row0 col7" >2026-05-29</td>
+      <td id="T_3b675_row0_col8" class="data row0 col8" >+0.11%</td>
+      <td id="T_3b675_row0_col9" class="data row0 col9" >50.98K</td>
+      <td id="T_3b675_row0_col10" class="data row0 col10" >+54</td>
+    </tr>
+    <tr>
+      <td id="T_3b675_row1_col0" class="data row1 col0" >0P00006FZD.SI</td>
+      <td id="T_3b675_row1_col1" class="data row1 col1" >Cash · Singapore</td>
+      <td id="T_3b675_row1_col2" class="data row1 col2" >30.00%</td>
+      <td id="T_3b675_row1_col3" class="data row1 col3" >21.82K</td>
+      <td id="T_3b675_row1_col4" class="data row1 col4" >1.4953</td>
+      <td id="T_3b675_row1_col5" class="data row1 col5" >2026-04-30</td>
+      <td id="T_3b675_row1_col6" class="data row1 col6" >1.4965</td>
+      <td id="T_3b675_row1_col7" class="data row1 col7" >2026-05-29</td>
+      <td id="T_3b675_row1_col8" class="data row1 col8" >+0.08%</td>
+      <td id="T_3b675_row1_col9" class="data row1 col9" >21.84K</td>
+      <td id="T_3b675_row1_col10" class="data row1 col10" >+18</td>
+    </tr>
+    <tr>
+      <td id="T_3b675_row2_col0" class="data row2 col0" >CASH_SGD</td>
+      <td id="T_3b675_row2_col1" class="data row2 col1" >Cash · Singapore</td>
+      <td id="T_3b675_row2_col2" class="data row2 col2" >0.00%</td>
+      <td id="T_3b675_row2_col3" class="data row2 col3" >0</td>
+      <td id="T_3b675_row2_col4" class="data row2 col4" >—</td>
+      <td id="T_3b675_row2_col5" class="data row2 col5" >2026-04-30</td>
+      <td id="T_3b675_row2_col6" class="data row2 col6" >—</td>
+      <td id="T_3b675_row2_col7" class="data row2 col7" >2026-05-29</td>
+      <td id="T_3b675_row2_col8" class="data row2 col8" >+0.00%</td>
+      <td id="T_3b675_row2_col9" class="data row2 col9" >0</td>
+      <td id="T_3b675_row2_col10" class="data row2 col10" >0</td>
+    </tr>
+    <tr>
+      <td id="T_3b675_row3_col0" class="data row3 col0" >Total</td>
+      <td id="T_3b675_row3_col1" class="data row3 col1" ></td>
+      <td id="T_3b675_row3_col2" class="data row3 col2" >100.00%</td>
+      <td id="T_3b675_row3_col3" class="data row3 col3" >72.75K</td>
+      <td id="T_3b675_row3_col4" class="data row3 col4" >—</td>
+      <td id="T_3b675_row3_col5" class="data row3 col5" >—</td>
+      <td id="T_3b675_row3_col6" class="data row3 col6" >—</td>
+      <td id="T_3b675_row3_col7" class="data row3 col7" >—</td>
+      <td id="T_3b675_row3_col8" class="data row3 col8" >+0.10%</td>
+      <td id="T_3b675_row3_col9" class="data row3 col9" >72.82K</td>
+      <td id="T_3b675_row3_col10" class="data row3 col10" >+72</td>
+    </tr>
+  </tbody>
+</table>
+</details>
+<details class="drill"><summary><a href="https://app.stashaway.sg/goal/681a41ba9b2f2c2b8501bb6e" target="_blank" rel="noopener" class="port-link">Crypto</a> · USD 54.80K → <span class="neg">50.77K</span> (<span class="neg">-4.03K USD / -4.97K SGD, -7.36%</span>) · 4 holdings</summary><style type="text/css">
+#T_c1f6f tbody tr:nth-child(5) td {
+  font-weight: 600;
+  border-top: 2px solid #30363d;
+}
+#T_c1f6f_row0_col8, #T_c1f6f_row0_col10, #T_c1f6f_row0_col13, #T_c1f6f_row1_col8, #T_c1f6f_row1_col10, #T_c1f6f_row1_col13, #T_c1f6f_row4_col8, #T_c1f6f_row4_col10, #T_c1f6f_row4_col13 {
+  background-color: rgba(248, 81, 73, 0.18);
+  color: #f85149;
+}
+#T_c1f6f_row2_col13 {
+  background-color: rgba(63, 185, 80, 0.18);
+  color: #3fb950;
+}
+</style>
+<table id="T_c1f6f" class="ds-table ds-holdings">
+  <thead>
+    <tr>
+      <th id="T_c1f6f_level0_col0" class="col_heading level0 col0" >Ticker</th>
+      <th id="T_c1f6f_level0_col1" class="col_heading level0 col1" >Asset · Region</th>
+      <th id="T_c1f6f_level0_col2" class="col_heading level0 col2" >Weight</th>
+      <th id="T_c1f6f_level0_col3" class="col_heading level0 col3" >Stmt value (USD)</th>
+      <th id="T_c1f6f_level0_col4" class="col_heading level0 col4" >Stmt price (USD)</th>
+      <th id="T_c1f6f_level0_col5" class="col_heading level0 col5" >Stmt date</th>
+      <th id="T_c1f6f_level0_col6" class="col_heading level0 col6" >Today price (USD)</th>
+      <th id="T_c1f6f_level0_col7" class="col_heading level0 col7" >Today date</th>
+      <th id="T_c1f6f_level0_col8" class="col_heading level0 col8" >Δ%</th>
+      <th id="T_c1f6f_level0_col9" class="col_heading level0 col9" >Today value (USD)</th>
+      <th id="T_c1f6f_level0_col10" class="col_heading level0 col10" >Δ value (USD)</th>
+      <th id="T_c1f6f_level0_col11" class="col_heading level0 col11" >Stmt value (SGD)</th>
+      <th id="T_c1f6f_level0_col12" class="col_heading level0 col12" >Today value (SGD)</th>
+      <th id="T_c1f6f_level0_col13" class="col_heading level0 col13" >Δ value (SGD)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td id="T_c1f6f_row0_col0" class="data row0 col0" >FBTC</td>
+      <td id="T_c1f6f_row0_col1" class="data row0 col1" >Crypto · Global</td>
+      <td id="T_c1f6f_row0_col2" class="data row0 col2" >49.50%</td>
+      <td id="T_c1f6f_row0_col3" class="data row0 col3" >27.13K</td>
+      <td id="T_c1f6f_row0_col4" class="data row0 col4" >66.5300</td>
+      <td id="T_c1f6f_row0_col5" class="data row0 col5" >2026-04-30</td>
+      <td id="T_c1f6f_row0_col6" class="data row0 col6" >63.9000</td>
+      <td id="T_c1f6f_row0_col7" class="data row0 col7" >2026-05-29</td>
+      <td id="T_c1f6f_row0_col8" class="data row0 col8" >-3.95%</td>
+      <td id="T_c1f6f_row0_col9" class="data row0 col9" >26.06K</td>
+      <td id="T_c1f6f_row0_col10" class="data row0 col10" >-1.07K</td>
+      <td id="T_c1f6f_row0_col11" class="data row0 col11" >34.54K</td>
+      <td id="T_c1f6f_row0_col12" class="data row0 col12" >33.26K</td>
+      <td id="T_c1f6f_row0_col13" class="data row0 col13" >-1.28K</td>
+    </tr>
+    <tr>
+      <td id="T_c1f6f_row1_col0" class="data row1 col0" >FETH</td>
+      <td id="T_c1f6f_row1_col1" class="data row1 col1" >Crypto · Global</td>
+      <td id="T_c1f6f_row1_col2" class="data row1 col2" >49.50%</td>
+      <td id="T_c1f6f_row1_col3" class="data row1 col3" >27.13K</td>
+      <td id="T_c1f6f_row1_col4" class="data row1 col4" >22.5300</td>
+      <td id="T_c1f6f_row1_col5" class="data row1 col5" >2026-04-30</td>
+      <td id="T_c1f6f_row1_col6" class="data row1 col6" >20.0700</td>
+      <td id="T_c1f6f_row1_col7" class="data row1 col7" >2026-05-29</td>
+      <td id="T_c1f6f_row1_col8" class="data row1 col8" >-10.92%</td>
+      <td id="T_c1f6f_row1_col9" class="data row1 col9" >24.17K</td>
+      <td id="T_c1f6f_row1_col10" class="data row1 col10" >-2.96K</td>
+      <td id="T_c1f6f_row1_col11" class="data row1 col11" >34.54K</td>
+      <td id="T_c1f6f_row1_col12" class="data row1 col12" >30.84K</td>
+      <td id="T_c1f6f_row1_col13" class="data row1 col13" >-3.69K</td>
+    </tr>
+    <tr>
+      <td id="T_c1f6f_row2_col0" class="data row2 col0" >CASH_SGD</td>
+      <td id="T_c1f6f_row2_col1" class="data row2 col1" >Cash · Singapore</td>
+      <td id="T_c1f6f_row2_col2" class="data row2 col2" >1.00%</td>
+      <td id="T_c1f6f_row2_col3" class="data row2 col3" >548</td>
+      <td id="T_c1f6f_row2_col4" class="data row2 col4" >—</td>
+      <td id="T_c1f6f_row2_col5" class="data row2 col5" >2026-04-30</td>
+      <td id="T_c1f6f_row2_col6" class="data row2 col6" >—</td>
+      <td id="T_c1f6f_row2_col7" class="data row2 col7" >2026-05-29</td>
+      <td id="T_c1f6f_row2_col8" class="data row2 col8" >+0.00%</td>
+      <td id="T_c1f6f_row2_col9" class="data row2 col9" >548</td>
+      <td id="T_c1f6f_row2_col10" class="data row2 col10" >0</td>
+      <td id="T_c1f6f_row2_col11" class="data row2 col11" >698</td>
+      <td id="T_c1f6f_row2_col12" class="data row2 col12" >700</td>
+      <td id="T_c1f6f_row2_col13" class="data row2 col13" >+2</td>
+    </tr>
+    <tr>
+      <td id="T_c1f6f_row3_col0" class="data row3 col0" >CASH_USD</td>
+      <td id="T_c1f6f_row3_col1" class="data row3 col1" >Cash · US</td>
+      <td id="T_c1f6f_row3_col2" class="data row3 col2" >0.00%</td>
+      <td id="T_c1f6f_row3_col3" class="data row3 col3" >0</td>
+      <td id="T_c1f6f_row3_col4" class="data row3 col4" >—</td>
+      <td id="T_c1f6f_row3_col5" class="data row3 col5" >2026-04-30</td>
+      <td id="T_c1f6f_row3_col6" class="data row3 col6" >—</td>
+      <td id="T_c1f6f_row3_col7" class="data row3 col7" >2026-05-29</td>
+      <td id="T_c1f6f_row3_col8" class="data row3 col8" >+0.00%</td>
+      <td id="T_c1f6f_row3_col9" class="data row3 col9" >0</td>
+      <td id="T_c1f6f_row3_col10" class="data row3 col10" >0</td>
+      <td id="T_c1f6f_row3_col11" class="data row3 col11" >0</td>
+      <td id="T_c1f6f_row3_col12" class="data row3 col12" >0</td>
+      <td id="T_c1f6f_row3_col13" class="data row3 col13" >0</td>
+    </tr>
+    <tr>
+      <td id="T_c1f6f_row4_col0" class="data row4 col0" >Total</td>
+      <td id="T_c1f6f_row4_col1" class="data row4 col1" ></td>
+      <td id="T_c1f6f_row4_col2" class="data row4 col2" >100.00%</td>
+      <td id="T_c1f6f_row4_col3" class="data row4 col3" >54.80K</td>
+      <td id="T_c1f6f_row4_col4" class="data row4 col4" >—</td>
+      <td id="T_c1f6f_row4_col5" class="data row4 col5" >—</td>
+      <td id="T_c1f6f_row4_col6" class="data row4 col6" >—</td>
+      <td id="T_c1f6f_row4_col7" class="data row4 col7" >—</td>
+      <td id="T_c1f6f_row4_col8" class="data row4 col8" >-7.36%</td>
+      <td id="T_c1f6f_row4_col9" class="data row4 col9" >50.77K</td>
+      <td id="T_c1f6f_row4_col10" class="data row4 col10" >-4.03K</td>
+      <td id="T_c1f6f_row4_col11" class="data row4 col11" >69.78K</td>
+      <td id="T_c1f6f_row4_col12" class="data row4 col12" >64.80K</td>
+      <td id="T_c1f6f_row4_col13" class="data row4 col13" >-4.97K</td>
+    </tr>
+  </tbody>
+</table>
+</details>
+<details class="drill"><summary><a href="https://app.stashaway.sg/goal/69f2aef5479f7817d0641742" target="_blank" rel="noopener" class="port-link">BlackRock</a> · USD 39.18K → <span class="pos">41.05K</span> (<span class="pos">+1.87K USD / +2.51K SGD, +4.77%</span>) · 21 holdings</summary><style type="text/css">
+#T_569ac tbody tr:nth-child(22) td {
+  font-weight: 600;
+  border-top: 2px solid #30363d;
+}
+#T_569ac_row0_col8, #T_569ac_row0_col10, #T_569ac_row0_col13, #T_569ac_row1_col8, #T_569ac_row1_col10, #T_569ac_row1_col13, #T_569ac_row2_col8, #T_569ac_row2_col10, #T_569ac_row2_col13, #T_569ac_row3_col8, #T_569ac_row3_col10, #T_569ac_row3_col13, #T_569ac_row4_col8, #T_569ac_row4_col10, #T_569ac_row4_col13, #T_569ac_row5_col8, #T_569ac_row5_col10, #T_569ac_row5_col13, #T_569ac_row6_col8, #T_569ac_row6_col10, #T_569ac_row6_col13, #T_569ac_row7_col8, #T_569ac_row7_col10, #T_569ac_row7_col13, #T_569ac_row8_col8, #T_569ac_row8_col10, #T_569ac_row8_col13, #T_569ac_row9_col8, #T_569ac_row9_col10, #T_569ac_row9_col13, #T_569ac_row12_col8, #T_569ac_row12_col10, #T_569ac_row12_col13, #T_569ac_row13_col8, #T_569ac_row13_col10, #T_569ac_row13_col13, #T_569ac_row14_col8, #T_569ac_row14_col10, #T_569ac_row14_col13, #T_569ac_row15_col8, #T_569ac_row15_col10, #T_569ac_row15_col13, #T_569ac_row16_col8, #T_569ac_row16_col10, #T_569ac_row16_col13, #T_569ac_row17_col13, #T_569ac_row18_col8, #T_569ac_row18_col10, #T_569ac_row18_col13, #T_569ac_row19_col13, #T_569ac_row20_col8, #T_569ac_row20_col10, #T_569ac_row20_col13, #T_569ac_row21_col8, #T_569ac_row21_col10, #T_569ac_row21_col13 {
+  background-color: rgba(63, 185, 80, 0.18);
+  color: #3fb950;
+}
+#T_569ac_row10_col8, #T_569ac_row10_col10, #T_569ac_row10_col13, #T_569ac_row11_col8, #T_569ac_row11_col10, #T_569ac_row11_col13 {
+  background-color: rgba(248, 81, 73, 0.18);
+  color: #f85149;
+}
+</style>
+<table id="T_569ac" class="ds-table ds-holdings">
+  <thead>
+    <tr>
+      <th id="T_569ac_level0_col0" class="col_heading level0 col0" >Ticker</th>
+      <th id="T_569ac_level0_col1" class="col_heading level0 col1" >Asset · Region</th>
+      <th id="T_569ac_level0_col2" class="col_heading level0 col2" >Weight</th>
+      <th id="T_569ac_level0_col3" class="col_heading level0 col3" >Stmt value (USD)</th>
+      <th id="T_569ac_level0_col4" class="col_heading level0 col4" >Stmt price (USD)</th>
+      <th id="T_569ac_level0_col5" class="col_heading level0 col5" >Stmt date</th>
+      <th id="T_569ac_level0_col6" class="col_heading level0 col6" >Today price (USD)</th>
+      <th id="T_569ac_level0_col7" class="col_heading level0 col7" >Today date</th>
+      <th id="T_569ac_level0_col8" class="col_heading level0 col8" >Δ%</th>
+      <th id="T_569ac_level0_col9" class="col_heading level0 col9" >Today value (USD)</th>
+      <th id="T_569ac_level0_col10" class="col_heading level0 col10" >Δ value (USD)</th>
+      <th id="T_569ac_level0_col11" class="col_heading level0 col11" >Stmt value (SGD)</th>
+      <th id="T_569ac_level0_col12" class="col_heading level0 col12" >Today value (SGD)</th>
+      <th id="T_569ac_level0_col13" class="col_heading level0 col13" >Δ value (SGD)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td id="T_569ac_row0_col0" class="data row0 col0" >CSUS.L</td>
+      <td id="T_569ac_row0_col1" class="data row0 col1" >Equity · US</td>
+      <td id="T_569ac_row0_col2" class="data row0 col2" >18.32%</td>
+      <td id="T_569ac_row0_col3" class="data row0 col3" >7.18K</td>
+      <td id="T_569ac_row0_col4" class="data row0 col4" >740.8000</td>
+      <td id="T_569ac_row0_col5" class="data row0 col5" >2026-04-30</td>
+      <td id="T_569ac_row0_col6" class="data row0 col6" >784.4000</td>
+      <td id="T_569ac_row0_col7" class="data row0 col7" >2026-05-29</td>
+      <td id="T_569ac_row0_col8" class="data row0 col8" >+5.89%</td>
+      <td id="T_569ac_row0_col9" class="data row0 col9" >7.60K</td>
+      <td id="T_569ac_row0_col10" class="data row0 col10" >+422</td>
+      <td id="T_569ac_row0_col11" class="data row0 col11" >9.14K</td>
+      <td id="T_569ac_row0_col12" class="data row0 col12" >9.70K</td>
+      <td id="T_569ac_row0_col13" class="data row0 col13" >+562</td>
+    </tr>
+    <tr>
+      <td id="T_569ac_row1_col0" class="data row1 col0" >CSPX.L</td>
+      <td id="T_569ac_row1_col1" class="data row1 col1" >Equity · US</td>
+      <td id="T_569ac_row1_col2" class="data row1 col2" >18.32%</td>
+      <td id="T_569ac_row1_col3" class="data row1 col3" >7.18K</td>
+      <td id="T_569ac_row1_col4" class="data row1 col4" >770.3500</td>
+      <td id="T_569ac_row1_col5" class="data row1 col5" >2026-04-30</td>
+      <td id="T_569ac_row1_col6" class="data row1 col6" >816.5200</td>
+      <td id="T_569ac_row1_col7" class="data row1 col7" >2026-05-29</td>
+      <td id="T_569ac_row1_col8" class="data row1 col8" >+5.99%</td>
+      <td id="T_569ac_row1_col9" class="data row1 col9" >7.61K</td>
+      <td id="T_569ac_row1_col10" class="data row1 col10" >+430</td>
+      <td id="T_569ac_row1_col11" class="data row1 col11" >9.14K</td>
+      <td id="T_569ac_row1_col12" class="data row1 col12" >9.71K</td>
+      <td id="T_569ac_row1_col13" class="data row1 col13" >+572</td>
+    </tr>
+    <tr>
+      <td id="T_569ac_row2_col0" class="data row2 col0" >SASU.L</td>
+      <td id="T_569ac_row2_col1" class="data row2 col1" >Equity · US</td>
+      <td id="T_569ac_row2_col2" class="data row2 col2" >11.29%</td>
+      <td id="T_569ac_row2_col3" class="data row2 col3" >4.42K</td>
+      <td id="T_569ac_row2_col4" class="data row2 col4" >14.8400</td>
+      <td id="T_569ac_row2_col5" class="data row2 col5" >2026-04-30</td>
+      <td id="T_569ac_row2_col6" class="data row2 col6" >15.7980</td>
+      <td id="T_569ac_row2_col7" class="data row2 col7" >2026-05-29</td>
+      <td id="T_569ac_row2_col8" class="data row2 col8" >+6.46%</td>
+      <td id="T_569ac_row2_col9" class="data row2 col9" >4.71K</td>
+      <td id="T_569ac_row2_col10" class="data row2 col10" >+286</td>
+      <td id="T_569ac_row2_col11" class="data row2 col11" >5.63K</td>
+      <td id="T_569ac_row2_col12" class="data row2 col12" >6.01K</td>
+      <td id="T_569ac_row2_col13" class="data row2 col13" >+379</td>
+    </tr>
+    <tr>
+      <td id="T_569ac_row3_col0" class="data row3 col0" >EXCH.AS</td>
+      <td id="T_569ac_row3_col1" class="data row3 col1" >Equity · Emerging Markets ex-China</td>
+      <td id="T_569ac_row3_col2" class="data row3 col2" >8.91%</td>
+      <td id="T_569ac_row3_col3" class="data row3 col3" >3.49K</td>
+      <td id="T_569ac_row3_col4" class="data row3 col4" >8.5528</td>
+      <td id="T_569ac_row3_col5" class="data row3 col5" >2026-04-30</td>
+      <td id="T_569ac_row3_col6" class="data row3 col6" >9.5950</td>
+      <td id="T_569ac_row3_col7" class="data row3 col7" >2026-05-29</td>
+      <td id="T_569ac_row3_col8" class="data row3 col8" >+12.19%</td>
+      <td id="T_569ac_row3_col9" class="data row3 col9" >3.92K</td>
+      <td id="T_569ac_row3_col10" class="data row3 col10" >+425</td>
+      <td id="T_569ac_row3_col11" class="data row3 col11" >4.44K</td>
+      <td id="T_569ac_row3_col12" class="data row3 col12" >5.00K</td>
+      <td id="T_569ac_row3_col13" class="data row3 col13" >+554</td>
+    </tr>
+    <tr>
+      <td id="T_569ac_row4_col0" class="data row4 col0" >CEUU.AS</td>
+      <td id="T_569ac_row4_col1" class="data row4 col1" >Equity · Eurozone</td>
+      <td id="T_569ac_row4_col2" class="data row4 col2" >5.54%</td>
+      <td id="T_569ac_row4_col3" class="data row4 col3" >2.17K</td>
+      <td id="T_569ac_row4_col4" class="data row4 col4" >11.6140</td>
+      <td id="T_569ac_row4_col5" class="data row4 col5" >2026-04-30</td>
+      <td id="T_569ac_row4_col6" class="data row4 col6" >12.1320</td>
+      <td id="T_569ac_row4_col7" class="data row4 col7" >2026-05-29</td>
+      <td id="T_569ac_row4_col8" class="data row4 col8" >+4.46%</td>
+      <td id="T_569ac_row4_col9" class="data row4 col9" >2.27K</td>
+      <td id="T_569ac_row4_col10" class="data row4 col10" >+97</td>
+      <td id="T_569ac_row4_col11" class="data row4 col11" >2.76K</td>
+      <td id="T_569ac_row4_col12" class="data row4 col12" >2.89K</td>
+      <td id="T_569ac_row4_col13" class="data row4 col13" >+131</td>
+    </tr>
+    <tr>
+      <td id="T_569ac_row5_col0" class="data row5 col0" >ISAC.L</td>
+      <td id="T_569ac_row5_col1" class="data row5 col1" >Equity · Global</td>
+      <td id="T_569ac_row5_col2" class="data row5 col2" >4.95%</td>
+      <td id="T_569ac_row5_col3" class="data row5 col3" >1.94K</td>
+      <td id="T_569ac_row5_col4" class="data row5 col4" >115.6300</td>
+      <td id="T_569ac_row5_col5" class="data row5 col5" >2026-04-30</td>
+      <td id="T_569ac_row5_col6" class="data row5 col6" >121.9700</td>
+      <td id="T_569ac_row5_col7" class="data row5 col7" >2026-05-29</td>
+      <td id="T_569ac_row5_col8" class="data row5 col8" >+5.48%</td>
+      <td id="T_569ac_row5_col9" class="data row5 col9" >2.05K</td>
+      <td id="T_569ac_row5_col10" class="data row5 col10" >+106</td>
+      <td id="T_569ac_row5_col11" class="data row5 col11" >2.47K</td>
+      <td id="T_569ac_row5_col12" class="data row5 col12" >2.61K</td>
+      <td id="T_569ac_row5_col13" class="data row5 col13" >+142</td>
+    </tr>
+    <tr>
+      <td id="T_569ac_row6_col0" class="data row6 col0" >IJPA.L</td>
+      <td id="T_569ac_row6_col1" class="data row6 col1" >Equity · Japan</td>
+      <td id="T_569ac_row6_col2" class="data row6 col2" >4.16%</td>
+      <td id="T_569ac_row6_col3" class="data row6 col3" >1.63K</td>
+      <td id="T_569ac_row6_col4" class="data row6 col4" >75.9100</td>
+      <td id="T_569ac_row6_col5" class="data row6 col5" >2026-04-30</td>
+      <td id="T_569ac_row6_col6" class="data row6 col6" >79.7300</td>
+      <td id="T_569ac_row6_col7" class="data row6 col7" >2026-05-29</td>
+      <td id="T_569ac_row6_col8" class="data row6 col8" >+5.03%</td>
+      <td id="T_569ac_row6_col9" class="data row6 col9" >1.71K</td>
+      <td id="T_569ac_row6_col10" class="data row6 col10" >+82</td>
+      <td id="T_569ac_row6_col11" class="data row6 col11" >2.08K</td>
+      <td id="T_569ac_row6_col12" class="data row6 col12" >2.19K</td>
+      <td id="T_569ac_row6_col13" class="data row6 col13" >+110</td>
+    </tr>
+    <tr>
+      <td id="T_569ac_row7_col0" class="data row7 col0" >IDTL.L</td>
+      <td id="T_569ac_row7_col1" class="data row7 col1" >Bond · US</td>
+      <td id="T_569ac_row7_col2" class="data row7 col2" >4.06%</td>
+      <td id="T_569ac_row7_col3" class="data row7 col3" >1.59K</td>
+      <td id="T_569ac_row7_col4" class="data row7 col4" >3.2085</td>
+      <td id="T_569ac_row7_col5" class="data row7 col5" >2026-04-30</td>
+      <td id="T_569ac_row7_col6" class="data row7 col6" >3.2230</td>
+      <td id="T_569ac_row7_col7" class="data row7 col7" >2026-05-29</td>
+      <td id="T_569ac_row7_col8" class="data row7 col8" >+0.45%</td>
+      <td id="T_569ac_row7_col9" class="data row7 col9" >1.60K</td>
+      <td id="T_569ac_row7_col10" class="data row7 col10" >+7</td>
+      <td id="T_569ac_row7_col11" class="data row7 col11" >2.03K</td>
+      <td id="T_569ac_row7_col12" class="data row7 col12" >2.04K</td>
+      <td id="T_569ac_row7_col13" class="data row7 col13" >+14</td>
+    </tr>
+    <tr>
+      <td id="T_569ac_row8_col0" class="data row8 col0" >TIP5.L</td>
+      <td id="T_569ac_row8_col1" class="data row8 col1" >Bond · US</td>
+      <td id="T_569ac_row8_col2" class="data row8 col2" >3.66%</td>
+      <td id="T_569ac_row8_col3" class="data row8 col3" >1.43K</td>
+      <td id="T_569ac_row8_col4" class="data row8 col4" >4.8876</td>
+      <td id="T_569ac_row8_col5" class="data row8 col5" >2026-04-30</td>
+      <td id="T_569ac_row8_col6" class="data row8 col6" >4.9020</td>
+      <td id="T_569ac_row8_col7" class="data row8 col7" >2026-05-29</td>
+      <td id="T_569ac_row8_col8" class="data row8 col8" >+0.29%</td>
+      <td id="T_569ac_row8_col9" class="data row8 col9" >1.44K</td>
+      <td id="T_569ac_row8_col10" class="data row8 col10" >+4</td>
+      <td id="T_569ac_row8_col11" class="data row8 col11" >1.83K</td>
+      <td id="T_569ac_row8_col12" class="data row8 col12" >1.84K</td>
+      <td id="T_569ac_row8_col13" class="data row8 col13" >+10</td>
+    </tr>
+    <tr>
+      <td id="T_569ac_row9_col0" class="data row9 col0" >CCAU.L</td>
+      <td id="T_569ac_row9_col1" class="data row9 col1" >Equity · Canada</td>
+      <td id="T_569ac_row9_col2" class="data row9 col2" >3.27%</td>
+      <td id="T_569ac_row9_col3" class="data row9 col3" >1.28K</td>
+      <td id="T_569ac_row9_col4" class="data row9 col4" >299.7500</td>
+      <td id="T_569ac_row9_col5" class="data row9 col5" >2026-04-30</td>
+      <td id="T_569ac_row9_col6" class="data row9 col6" >303.7500</td>
+      <td id="T_569ac_row9_col7" class="data row9 col7" >2026-05-29</td>
+      <td id="T_569ac_row9_col8" class="data row9 col8" >+1.33%</td>
+      <td id="T_569ac_row9_col9" class="data row9 col9" >1.30K</td>
+      <td id="T_569ac_row9_col10" class="data row9 col10" >+17</td>
+      <td id="T_569ac_row9_col11" class="data row9 col11" >1.63K</td>
+      <td id="T_569ac_row9_col12" class="data row9 col12" >1.66K</td>
+      <td id="T_569ac_row9_col13" class="data row9 col13" >+26</td>
+    </tr>
+    <tr>
+      <td id="T_569ac_row10_col0" class="data row10 col0" >ICHN.AS</td>
+      <td id="T_569ac_row10_col1" class="data row10 col1" >Equity · China</td>
+      <td id="T_569ac_row10_col2" class="data row10 col2" >2.77%</td>
+      <td id="T_569ac_row10_col3" class="data row10 col3" >1.09K</td>
+      <td id="T_569ac_row10_col4" class="data row10 col4" >5.8640</td>
+      <td id="T_569ac_row10_col5" class="data row10 col5" >2026-04-30</td>
+      <td id="T_569ac_row10_col6" class="data row10 col6" >5.6520</td>
+      <td id="T_569ac_row10_col7" class="data row10 col7" >2026-05-29</td>
+      <td id="T_569ac_row10_col8" class="data row10 col8" >-3.62%</td>
+      <td id="T_569ac_row10_col9" class="data row10 col9" >1.05K</td>
+      <td id="T_569ac_row10_col10" class="data row10 col10" >-39</td>
+      <td id="T_569ac_row10_col11" class="data row10 col11" >1.38K</td>
+      <td id="T_569ac_row10_col12" class="data row10 col12" >1.34K</td>
+      <td id="T_569ac_row10_col13" class="data row10 col13" >-47</td>
+    </tr>
+    <tr>
+      <td id="T_569ac_row11_col0" class="data row11 col0" >IGLN.L</td>
+      <td id="T_569ac_row11_col1" class="data row11 col1" >Commodity · Global</td>
+      <td id="T_569ac_row11_col2" class="data row11 col2" >2.77%</td>
+      <td id="T_569ac_row11_col3" class="data row11 col3" >1.09K</td>
+      <td id="T_569ac_row11_col4" class="data row11 col4" >89.7250</td>
+      <td id="T_569ac_row11_col5" class="data row11 col5" >2026-04-30</td>
+      <td id="T_569ac_row11_col6" class="data row11 col6" >88.8500</td>
+      <td id="T_569ac_row11_col7" class="data row11 col7" >2026-05-29</td>
+      <td id="T_569ac_row11_col8" class="data row11 col8" >-0.98%</td>
+      <td id="T_569ac_row11_col9" class="data row11 col9" >1.07K</td>
+      <td id="T_569ac_row11_col10" class="data row11 col10" >-11</td>
+      <td id="T_569ac_row11_col11" class="data row11 col11" >1.38K</td>
+      <td id="T_569ac_row11_col12" class="data row11 col12" >1.37K</td>
+      <td id="T_569ac_row11_col13" class="data row11 col13" >-10</td>
+    </tr>
+    <tr>
+      <td id="T_569ac_row12_col0" class="data row12 col0" >IMBS.L</td>
+      <td id="T_569ac_row12_col1" class="data row12 col1" >Bond · US</td>
+      <td id="T_569ac_row12_col2" class="data row12 col2" >2.67%</td>
+      <td id="T_569ac_row12_col3" class="data row12 col3" >1.05K</td>
+      <td id="T_569ac_row12_col4" class="data row12 col4" >4.2215</td>
+      <td id="T_569ac_row12_col5" class="data row12 col5" >2026-04-30</td>
+      <td id="T_569ac_row12_col6" class="data row12 col6" >4.2400</td>
+      <td id="T_569ac_row12_col7" class="data row12 col7" >2026-05-29</td>
+      <td id="T_569ac_row12_col8" class="data row12 col8" >+0.44%</td>
+      <td id="T_569ac_row12_col9" class="data row12 col9" >1.05K</td>
+      <td id="T_569ac_row12_col10" class="data row12 col10" >+5</td>
+      <td id="T_569ac_row12_col11" class="data row12 col11" >1.33K</td>
+      <td id="T_569ac_row12_col12" class="data row12 col12" >1.34K</td>
+      <td id="T_569ac_row12_col13" class="data row12 col13" >+9</td>
+    </tr>
+    <tr>
+      <td id="T_569ac_row13_col0" class="data row13 col0" >IDTM.L</td>
+      <td id="T_569ac_row13_col1" class="data row13 col1" >Bond · US</td>
+      <td id="T_569ac_row13_col2" class="data row13 col2" >1.88%</td>
+      <td id="T_569ac_row13_col3" class="data row13 col3" >737</td>
+      <td id="T_569ac_row13_col4" class="data row13 col4" >170.7132</td>
+      <td id="T_569ac_row13_col5" class="data row13 col5" >2026-04-30</td>
+      <td id="T_569ac_row13_col6" class="data row13 col6" >170.8600</td>
+      <td id="T_569ac_row13_col7" class="data row13 col7" >2026-05-29</td>
+      <td id="T_569ac_row13_col8" class="data row13 col8" >+0.09%</td>
+      <td id="T_569ac_row13_col9" class="data row13 col9" >737</td>
+      <td id="T_569ac_row13_col10" class="data row13 col10" >+1</td>
+      <td id="T_569ac_row13_col11" class="data row13 col11" >938</td>
+      <td id="T_569ac_row13_col12" class="data row13 col12" >941</td>
+      <td id="T_569ac_row13_col13" class="data row13 col13" >+3</td>
+    </tr>
+    <tr>
+      <td id="T_569ac_row14_col0" class="data row14 col0" >IBTU.L</td>
+      <td id="T_569ac_row14_col1" class="data row14 col1" >Bond · US</td>
+      <td id="T_569ac_row14_col2" class="data row14 col2" >1.48%</td>
+      <td id="T_569ac_row14_col3" class="data row14 col3" >580</td>
+      <td id="T_569ac_row14_col4" class="data row14 col4" >4.9535</td>
+      <td id="T_569ac_row14_col5" class="data row14 col5" >2026-04-30</td>
+      <td id="T_569ac_row14_col6" class="data row14 col6" >4.9685</td>
+      <td id="T_569ac_row14_col7" class="data row14 col7" >2026-05-29</td>
+      <td id="T_569ac_row14_col8" class="data row14 col8" >+0.30%</td>
+      <td id="T_569ac_row14_col9" class="data row14 col9" >582</td>
+      <td id="T_569ac_row14_col10" class="data row14 col10" >+2</td>
+      <td id="T_569ac_row14_col11" class="data row14 col11" >738</td>
+      <td id="T_569ac_row14_col12" class="data row14 col12" >742</td>
+      <td id="T_569ac_row14_col13" class="data row14 col13" >+4</td>
+    </tr>
+    <tr>
+      <td id="T_569ac_row15_col0" class="data row15 col0" >ISFD.L</td>
+      <td id="T_569ac_row15_col1" class="data row15 col1" >Equity · UK</td>
+      <td id="T_569ac_row15_col2" class="data row15 col2" >1.09%</td>
+      <td id="T_569ac_row15_col3" class="data row15 col3" >427</td>
+      <td id="T_569ac_row15_col4" class="data row15 col4" >9.9680</td>
+      <td id="T_569ac_row15_col5" class="data row15 col5" >2026-04-30</td>
+      <td id="T_569ac_row15_col6" class="data row15 col6" >10.0240</td>
+      <td id="T_569ac_row15_col7" class="data row15 col7" >2026-05-29</td>
+      <td id="T_569ac_row15_col8" class="data row15 col8" >+0.56%</td>
+      <td id="T_569ac_row15_col9" class="data row15 col9" >429</td>
+      <td id="T_569ac_row15_col10" class="data row15 col10" >+2</td>
+      <td id="T_569ac_row15_col11" class="data row15 col11" >544</td>
+      <td id="T_569ac_row15_col12" class="data row15 col12" >548</td>
+      <td id="T_569ac_row15_col13" class="data row15 col13" >+4</td>
+    </tr>
+    <tr>
+      <td id="T_569ac_row16_col0" class="data row16 col0" >CPXJ.L</td>
+      <td id="T_569ac_row16_col1" class="data row16 col1" >Equity · Pacific ex-Japan</td>
+      <td id="T_569ac_row16_col2" class="data row16 col2" >1.09%</td>
+      <td id="T_569ac_row16_col3" class="data row16 col3" >427</td>
+      <td id="T_569ac_row16_col4" class="data row16 col4" >240.5900</td>
+      <td id="T_569ac_row16_col5" class="data row16 col5" >2026-04-30</td>
+      <td id="T_569ac_row16_col6" class="data row16 col6" >241.0600</td>
+      <td id="T_569ac_row16_col7" class="data row16 col7" >2026-05-29</td>
+      <td id="T_569ac_row16_col8" class="data row16 col8" >+0.20%</td>
+      <td id="T_569ac_row16_col9" class="data row16 col9" >428</td>
+      <td id="T_569ac_row16_col10" class="data row16 col10" >+1</td>
+      <td id="T_569ac_row16_col11" class="data row16 col11" >544</td>
+      <td id="T_569ac_row16_col12" class="data row16 col12" >546</td>
+      <td id="T_569ac_row16_col13" class="data row16 col13" >+2</td>
+    </tr>
+    <tr>
+      <td id="T_569ac_row17_col0" class="data row17 col0" >CASH_USD</td>
+      <td id="T_569ac_row17_col1" class="data row17 col1" >Cash · US</td>
+      <td id="T_569ac_row17_col2" class="data row17 col2" >1.00%</td>
+      <td id="T_569ac_row17_col3" class="data row17 col3" >392</td>
+      <td id="T_569ac_row17_col4" class="data row17 col4" >—</td>
+      <td id="T_569ac_row17_col5" class="data row17 col5" >2026-04-30</td>
+      <td id="T_569ac_row17_col6" class="data row17 col6" >—</td>
+      <td id="T_569ac_row17_col7" class="data row17 col7" >2026-05-29</td>
+      <td id="T_569ac_row17_col8" class="data row17 col8" >+0.00%</td>
+      <td id="T_569ac_row17_col9" class="data row17 col9" >392</td>
+      <td id="T_569ac_row17_col10" class="data row17 col10" >0</td>
+      <td id="T_569ac_row17_col11" class="data row17 col11" >499</td>
+      <td id="T_569ac_row17_col12" class="data row17 col12" >500</td>
+      <td id="T_569ac_row17_col13" class="data row17 col13" >+1</td>
+    </tr>
+    <tr>
+      <td id="T_569ac_row18_col0" class="data row18 col0" >IJPD.L</td>
+      <td id="T_569ac_row18_col1" class="data row18 col1" >Equity · Japan</td>
+      <td id="T_569ac_row18_col2" class="data row18 col2" >0.99%</td>
+      <td id="T_569ac_row18_col3" class="data row18 col3" >388</td>
+      <td id="T_569ac_row18_col4" class="data row18 col4" >109.8000</td>
+      <td id="T_569ac_row18_col5" class="data row18 col5" >2026-04-30</td>
+      <td id="T_569ac_row18_col6" class="data row18 col6" >117.3400</td>
+      <td id="T_569ac_row18_col7" class="data row18 col7" >2026-05-29</td>
+      <td id="T_569ac_row18_col8" class="data row18 col8" >+6.87%</td>
+      <td id="T_569ac_row18_col9" class="data row18 col9" >415</td>
+      <td id="T_569ac_row18_col10" class="data row18 col10" >+27</td>
+      <td id="T_569ac_row18_col11" class="data row18 col11" >494</td>
+      <td id="T_569ac_row18_col12" class="data row18 col12" >529</td>
+      <td id="T_569ac_row18_col13" class="data row18 col13" >+35</td>
+    </tr>
+    <tr>
+      <td id="T_569ac_row19_col0" class="data row19 col0" >IUIS.L</td>
+      <td id="T_569ac_row19_col1" class="data row19 col1" >Equity · US</td>
+      <td id="T_569ac_row19_col2" class="data row19 col2" >0.99%</td>
+      <td id="T_569ac_row19_col3" class="data row19 col3" >388</td>
+      <td id="T_569ac_row19_col4" class="data row19 col4" >14.6800</td>
+      <td id="T_569ac_row19_col5" class="data row19 col5" >2026-04-30</td>
+      <td id="T_569ac_row19_col6" class="data row19 col6" >14.6800</td>
+      <td id="T_569ac_row19_col7" class="data row19 col7" >2026-05-29</td>
+      <td id="T_569ac_row19_col8" class="data row19 col8" >+0.00%</td>
+      <td id="T_569ac_row19_col9" class="data row19 col9" >388</td>
+      <td id="T_569ac_row19_col10" class="data row19 col10" >0</td>
+      <td id="T_569ac_row19_col11" class="data row19 col11" >494</td>
+      <td id="T_569ac_row19_col12" class="data row19 col12" >495</td>
+      <td id="T_569ac_row19_col13" class="data row19 col13" >+1</td>
+    </tr>
+    <tr>
+      <td id="T_569ac_row20_col0" class="data row20 col0" >IEMB.L</td>
+      <td id="T_569ac_row20_col1" class="data row20 col1" >Bond · Emerging Markets</td>
+      <td id="T_569ac_row20_col2" class="data row20 col2" >0.79%</td>
+      <td id="T_569ac_row20_col3" class="data row20 col3" >310</td>
+      <td id="T_569ac_row20_col4" class="data row20 col4" >91.9254</td>
+      <td id="T_569ac_row20_col5" class="data row20 col5" >2026-04-30</td>
+      <td id="T_569ac_row20_col6" class="data row20 col6" >92.8200</td>
+      <td id="T_569ac_row20_col7" class="data row20 col7" >2026-05-29</td>
+      <td id="T_569ac_row20_col8" class="data row20 col8" >+0.97%</td>
+      <td id="T_569ac_row20_col9" class="data row20 col9" >313</td>
+      <td id="T_569ac_row20_col10" class="data row20 col10" >+3</td>
+      <td id="T_569ac_row20_col11" class="data row20 col11" >394</td>
+      <td id="T_569ac_row20_col12" class="data row20 col12" >399</td>
+      <td id="T_569ac_row20_col13" class="data row20 col13" >+5</td>
+    </tr>
+    <tr>
+      <td id="T_569ac_row21_col0" class="data row21 col0" >Total</td>
+      <td id="T_569ac_row21_col1" class="data row21 col1" ></td>
+      <td id="T_569ac_row21_col2" class="data row21 col2" >100.00%</td>
+      <td id="T_569ac_row21_col3" class="data row21 col3" >39.18K</td>
+      <td id="T_569ac_row21_col4" class="data row21 col4" >—</td>
+      <td id="T_569ac_row21_col5" class="data row21 col5" >—</td>
+      <td id="T_569ac_row21_col6" class="data row21 col6" >—</td>
+      <td id="T_569ac_row21_col7" class="data row21 col7" >—</td>
+      <td id="T_569ac_row21_col8" class="data row21 col8" >+4.77%</td>
+      <td id="T_569ac_row21_col9" class="data row21 col9" >41.05K</td>
+      <td id="T_569ac_row21_col10" class="data row21 col10" >+1.87K</td>
+      <td id="T_569ac_row21_col11" class="data row21 col11" >49.88K</td>
+      <td id="T_569ac_row21_col12" class="data row21 col12" >52.39K</td>
+      <td id="T_569ac_row21_col13" class="data row21 col13" >+2.51K</td>
+    </tr>
+  </tbody>
+</table>
+</details>
+<details class="drill"><summary><a href="https://app.stashaway.sg/goal/69ee569393f415879e429af4" target="_blank" rel="noopener" class="port-link">High Dividend Yield</a> · USD 23.86K → <span class="pos">24.16K</span> (<span class="pos">+304 USD / +464 SGD, +1.27%</span>) · 2 holdings</summary><style type="text/css">
+#T_a5cce tbody tr:nth-child(3) td {
+  font-weight: 600;
+  border-top: 2px solid #30363d;
+}
+#T_a5cce_row0_col8, #T_a5cce_row0_col10, #T_a5cce_row0_col13, #T_a5cce_row1_col13, #T_a5cce_row2_col8, #T_a5cce_row2_col10, #T_a5cce_row2_col13 {
+  background-color: rgba(63, 185, 80, 0.18);
+  color: #3fb950;
+}
+</style>
+<table id="T_a5cce" class="ds-table ds-holdings">
+  <thead>
+    <tr>
+      <th id="T_a5cce_level0_col0" class="col_heading level0 col0" >Ticker</th>
+      <th id="T_a5cce_level0_col1" class="col_heading level0 col1" >Asset · Region</th>
+      <th id="T_a5cce_level0_col2" class="col_heading level0 col2" >Weight</th>
+      <th id="T_a5cce_level0_col3" class="col_heading level0 col3" >Stmt value (USD)</th>
+      <th id="T_a5cce_level0_col4" class="col_heading level0 col4" >Stmt price (USD)</th>
+      <th id="T_a5cce_level0_col5" class="col_heading level0 col5" >Stmt date</th>
+      <th id="T_a5cce_level0_col6" class="col_heading level0 col6" >Today price (USD)</th>
+      <th id="T_a5cce_level0_col7" class="col_heading level0 col7" >Today date</th>
+      <th id="T_a5cce_level0_col8" class="col_heading level0 col8" >Δ%</th>
+      <th id="T_a5cce_level0_col9" class="col_heading level0 col9" >Today value (USD)</th>
+      <th id="T_a5cce_level0_col10" class="col_heading level0 col10" >Δ value (USD)</th>
+      <th id="T_a5cce_level0_col11" class="col_heading level0 col11" >Stmt value (SGD)</th>
+      <th id="T_a5cce_level0_col12" class="col_heading level0 col12" >Today value (SGD)</th>
+      <th id="T_a5cce_level0_col13" class="col_heading level0 col13" >Δ value (SGD)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td id="T_a5cce_row0_col0" class="data row0 col0" >VYM</td>
+      <td id="T_a5cce_row0_col1" class="data row0 col1" >Equity · US</td>
+      <td id="T_a5cce_row0_col2" class="data row0 col2" >99.99%</td>
+      <td id="T_a5cce_row0_col3" class="data row0 col3" >23.86K</td>
+      <td id="T_a5cce_row0_col4" class="data row0 col4" >157.1900</td>
+      <td id="T_a5cce_row0_col5" class="data row0 col5" >2026-04-30</td>
+      <td id="T_a5cce_row0_col6" class="data row0 col6" >159.1900</td>
+      <td id="T_a5cce_row0_col7" class="data row0 col7" >2026-05-29</td>
+      <td id="T_a5cce_row0_col8" class="data row0 col8" >+1.27%</td>
+      <td id="T_a5cce_row0_col9" class="data row0 col9" >24.16K</td>
+      <td id="T_a5cce_row0_col10" class="data row0 col10" >+304</td>
+      <td id="T_a5cce_row0_col11" class="data row0 col11" >30.38K</td>
+      <td id="T_a5cce_row0_col12" class="data row0 col12" >30.84K</td>
+      <td id="T_a5cce_row0_col13" class="data row0 col13" >+464</td>
+    </tr>
+    <tr>
+      <td id="T_a5cce_row1_col0" class="data row1 col0" >CASH_USD</td>
+      <td id="T_a5cce_row1_col1" class="data row1 col1" >Cash · US</td>
+      <td id="T_a5cce_row1_col2" class="data row1 col2" >0.01%</td>
+      <td id="T_a5cce_row1_col3" class="data row1 col3" >2</td>
+      <td id="T_a5cce_row1_col4" class="data row1 col4" >—</td>
+      <td id="T_a5cce_row1_col5" class="data row1 col5" >2026-04-30</td>
+      <td id="T_a5cce_row1_col6" class="data row1 col6" >—</td>
+      <td id="T_a5cce_row1_col7" class="data row1 col7" >2026-05-29</td>
+      <td id="T_a5cce_row1_col8" class="data row1 col8" >+0.00%</td>
+      <td id="T_a5cce_row1_col9" class="data row1 col9" >2</td>
+      <td id="T_a5cce_row1_col10" class="data row1 col10" >0</td>
+      <td id="T_a5cce_row1_col11" class="data row1 col11" >3</td>
+      <td id="T_a5cce_row1_col12" class="data row1 col12" >3</td>
+      <td id="T_a5cce_row1_col13" class="data row1 col13" >+0</td>
+    </tr>
+    <tr>
+      <td id="T_a5cce_row2_col0" class="data row2 col0" >Total</td>
+      <td id="T_a5cce_row2_col1" class="data row2 col1" ></td>
+      <td id="T_a5cce_row2_col2" class="data row2 col2" >100.00%</td>
+      <td id="T_a5cce_row2_col3" class="data row2 col3" >23.86K</td>
+      <td id="T_a5cce_row2_col4" class="data row2 col4" >—</td>
+      <td id="T_a5cce_row2_col5" class="data row2 col5" >—</td>
+      <td id="T_a5cce_row2_col6" class="data row2 col6" >—</td>
+      <td id="T_a5cce_row2_col7" class="data row2 col7" >—</td>
+      <td id="T_a5cce_row2_col8" class="data row2 col8" >+1.27%</td>
+      <td id="T_a5cce_row2_col9" class="data row2 col9" >24.16K</td>
+      <td id="T_a5cce_row2_col10" class="data row2 col10" >+304</td>
+      <td id="T_a5cce_row2_col11" class="data row2 col11" >30.38K</td>
+      <td id="T_a5cce_row2_col12" class="data row2 col12" >30.84K</td>
+      <td id="T_a5cce_row2_col13" class="data row2 col13" >+464</td>
+    </tr>
+  </tbody>
+</table>
+</details>
+<details class="drill"><summary><a href="https://app.stashaway.sg/goal/69b9919d3915b979131e35be" target="_blank" rel="noopener" class="port-link">Singapore Investing</a> · SGD 19.98K → <span class="pos">20.15K</span> (<span class="pos">+169 SGD, +0.85%</span>) · 7 holdings</summary><style type="text/css">
+#T_d75b4 tbody tr:nth-child(8) td {
+  font-weight: 600;
+  border-top: 2px solid #30363d;
+}
+#T_d75b4_row0_col8, #T_d75b4_row0_col10, #T_d75b4_row1_col8, #T_d75b4_row1_col10, #T_d75b4_row2_col8, #T_d75b4_row2_col10, #T_d75b4_row3_col8, #T_d75b4_row3_col10, #T_d75b4_row5_col8, #T_d75b4_row5_col10, #T_d75b4_row7_col8, #T_d75b4_row7_col10 {
+  background-color: rgba(63, 185, 80, 0.18);
+  color: #3fb950;
+}
+#T_d75b4_row4_col8, #T_d75b4_row4_col10 {
+  background-color: rgba(248, 81, 73, 0.18);
+  color: #f85149;
+}
+</style>
+<table id="T_d75b4" class="ds-table ds-holdings">
+  <thead>
+    <tr>
+      <th id="T_d75b4_level0_col0" class="col_heading level0 col0" >Ticker</th>
+      <th id="T_d75b4_level0_col1" class="col_heading level0 col1" >Asset · Region</th>
+      <th id="T_d75b4_level0_col2" class="col_heading level0 col2" >Weight</th>
+      <th id="T_d75b4_level0_col3" class="col_heading level0 col3" >Stmt value (SGD)</th>
+      <th id="T_d75b4_level0_col4" class="col_heading level0 col4" >Stmt price (SGD)</th>
+      <th id="T_d75b4_level0_col5" class="col_heading level0 col5" >Stmt date</th>
+      <th id="T_d75b4_level0_col6" class="col_heading level0 col6" >Today price (SGD)</th>
+      <th id="T_d75b4_level0_col7" class="col_heading level0 col7" >Today date</th>
+      <th id="T_d75b4_level0_col8" class="col_heading level0 col8" >Δ%</th>
+      <th id="T_d75b4_level0_col9" class="col_heading level0 col9" >Today value (SGD)</th>
+      <th id="T_d75b4_level0_col10" class="col_heading level0 col10" >Δ value (SGD)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td id="T_d75b4_row0_col0" class="data row0 col0" >A35.SI</td>
+      <td id="T_d75b4_row0_col1" class="data row0 col1" >Bond · Singapore</td>
+      <td id="T_d75b4_row0_col2" class="data row0 col2" >24.00%</td>
+      <td id="T_d75b4_row0_col3" class="data row0 col3" >4.80K</td>
+      <td id="T_d75b4_row0_col4" class="data row0 col4" >1.1420</td>
+      <td id="T_d75b4_row0_col5" class="data row0 col5" >2026-04-30</td>
+      <td id="T_d75b4_row0_col6" class="data row0 col6" >1.1500</td>
+      <td id="T_d75b4_row0_col7" class="data row0 col7" >2026-05-29</td>
+      <td id="T_d75b4_row0_col8" class="data row0 col8" >+0.70%</td>
+      <td id="T_d75b4_row0_col9" class="data row0 col9" >4.83K</td>
+      <td id="T_d75b4_row0_col10" class="data row0 col10" >+34</td>
+    </tr>
+    <tr>
+      <td id="T_d75b4_row1_col0" class="data row1 col0" >MBH.SI</td>
+      <td id="T_d75b4_row1_col1" class="data row1 col1" >Bond · Singapore</td>
+      <td id="T_d75b4_row1_col2" class="data row1 col2" >18.00%</td>
+      <td id="T_d75b4_row1_col3" class="data row1 col3" >3.60K</td>
+      <td id="T_d75b4_row1_col4" class="data row1 col4" >1.0110</td>
+      <td id="T_d75b4_row1_col5" class="data row1 col5" >2026-04-30</td>
+      <td id="T_d75b4_row1_col6" class="data row1 col6" >1.0130</td>
+      <td id="T_d75b4_row1_col7" class="data row1 col7" >2026-05-29</td>
+      <td id="T_d75b4_row1_col8" class="data row1 col8" >+0.20%</td>
+      <td id="T_d75b4_row1_col9" class="data row1 col9" >3.60K</td>
+      <td id="T_d75b4_row1_col10" class="data row1 col10" >+7</td>
+    </tr>
+    <tr>
+      <td id="T_d75b4_row2_col0" class="data row2 col0" >G3B.SI</td>
+      <td id="T_d75b4_row2_col1" class="data row2 col1" >Equity · Singapore</td>
+      <td id="T_d75b4_row2_col2" class="data row2 col2" >17.00%</td>
+      <td id="T_d75b4_row2_col3" class="data row2 col3" >3.40K</td>
+      <td id="T_d75b4_row2_col4" class="data row2 col4" >5.0570</td>
+      <td id="T_d75b4_row2_col5" class="data row2 col5" >2026-04-30</td>
+      <td id="T_d75b4_row2_col6" class="data row2 col6" >5.2410</td>
+      <td id="T_d75b4_row2_col7" class="data row2 col7" >2026-05-29</td>
+      <td id="T_d75b4_row2_col8" class="data row2 col8" >+3.64%</td>
+      <td id="T_d75b4_row2_col9" class="data row2 col9" >3.52K</td>
+      <td id="T_d75b4_row2_col10" class="data row2 col10" >+124</td>
+    </tr>
+    <tr>
+      <td id="T_d75b4_row3_col0" class="data row3 col0" >QL3.SI</td>
+      <td id="T_d75b4_row3_col1" class="data row3 col1" >Bond · Asia ex-Japan</td>
+      <td id="T_d75b4_row3_col2" class="data row3 col2" >16.00%</td>
+      <td id="T_d75b4_row3_col3" class="data row3 col3" >3.20K</td>
+      <td id="T_d75b4_row3_col4" class="data row3 col4" >8.5800</td>
+      <td id="T_d75b4_row3_col5" class="data row3 col5" >2026-04-30</td>
+      <td id="T_d75b4_row3_col6" class="data row3 col6" >8.6200</td>
+      <td id="T_d75b4_row3_col7" class="data row3 col7" >2026-05-29</td>
+      <td id="T_d75b4_row3_col8" class="data row3 col8" >+0.47%</td>
+      <td id="T_d75b4_row3_col9" class="data row3 col9" >3.21K</td>
+      <td id="T_d75b4_row3_col10" class="data row3 col10" >+15</td>
+    </tr>
+    <tr>
+      <td id="T_d75b4_row4_col0" class="data row4 col0" >CLR.SI</td>
+      <td id="T_d75b4_row4_col1" class="data row4 col1" >Equity · Singapore</td>
+      <td id="T_d75b4_row4_col2" class="data row4 col2" >12.00%</td>
+      <td id="T_d75b4_row4_col3" class="data row4 col3" >2.40K</td>
+      <td id="T_d75b4_row4_col4" class="data row4 col4" >0.8300</td>
+      <td id="T_d75b4_row4_col5" class="data row4 col5" >2026-04-30</td>
+      <td id="T_d75b4_row4_col6" class="data row4 col6" >0.8260</td>
+      <td id="T_d75b4_row4_col7" class="data row4 col7" >2026-05-29</td>
+      <td id="T_d75b4_row4_col8" class="data row4 col8" >-0.48%</td>
+      <td id="T_d75b4_row4_col9" class="data row4 col9" >2.39K</td>
+      <td id="T_d75b4_row4_col10" class="data row4 col10" >-12</td>
+    </tr>
+    <tr>
+      <td id="T_d75b4_row5_col0" class="data row5 col0" >MMS.SI</td>
+      <td id="T_d75b4_row5_col1" class="data row5 col1" >Cash · Singapore</td>
+      <td id="T_d75b4_row5_col2" class="data row5 col2" >12.00%</td>
+      <td id="T_d75b4_row5_col3" class="data row5 col3" >2.40K</td>
+      <td id="T_d75b4_row5_col4" class="data row5 col4" >103.1700</td>
+      <td id="T_d75b4_row5_col5" class="data row5 col5" >2026-04-30</td>
+      <td id="T_d75b4_row5_col6" class="data row5 col6" >103.2430</td>
+      <td id="T_d75b4_row5_col7" class="data row5 col7" >2026-05-29</td>
+      <td id="T_d75b4_row5_col8" class="data row5 col8" >+0.07%</td>
+      <td id="T_d75b4_row5_col9" class="data row5 col9" >2.40K</td>
+      <td id="T_d75b4_row5_col10" class="data row5 col10" >+2</td>
+    </tr>
+    <tr>
+      <td id="T_d75b4_row6_col0" class="data row6 col0" >CASH_SGD</td>
+      <td id="T_d75b4_row6_col1" class="data row6 col1" >Cash · Singapore</td>
+      <td id="T_d75b4_row6_col2" class="data row6 col2" >1.00%</td>
+      <td id="T_d75b4_row6_col3" class="data row6 col3" >200</td>
+      <td id="T_d75b4_row6_col4" class="data row6 col4" >—</td>
+      <td id="T_d75b4_row6_col5" class="data row6 col5" >2026-04-30</td>
+      <td id="T_d75b4_row6_col6" class="data row6 col6" >—</td>
+      <td id="T_d75b4_row6_col7" class="data row6 col7" >2026-05-29</td>
+      <td id="T_d75b4_row6_col8" class="data row6 col8" >+0.00%</td>
+      <td id="T_d75b4_row6_col9" class="data row6 col9" >200</td>
+      <td id="T_d75b4_row6_col10" class="data row6 col10" >0</td>
+    </tr>
+    <tr>
+      <td id="T_d75b4_row7_col0" class="data row7 col0" >Total</td>
+      <td id="T_d75b4_row7_col1" class="data row7 col1" ></td>
+      <td id="T_d75b4_row7_col2" class="data row7 col2" >100.00%</td>
+      <td id="T_d75b4_row7_col3" class="data row7 col3" >19.98K</td>
+      <td id="T_d75b4_row7_col4" class="data row7 col4" >—</td>
+      <td id="T_d75b4_row7_col5" class="data row7 col5" >—</td>
+      <td id="T_d75b4_row7_col6" class="data row7 col6" >—</td>
+      <td id="T_d75b4_row7_col7" class="data row7 col7" >—</td>
+      <td id="T_d75b4_row7_col8" class="data row7 col8" >+0.85%</td>
+      <td id="T_d75b4_row7_col9" class="data row7 col9" >20.15K</td>
+      <td id="T_d75b4_row7_col10" class="data row7 col10" >+169</td>
+    </tr>
+  </tbody>
+</table>
+</details>
+<details class="drill"><summary><a href="https://app.stashaway.sg/goal/6a0dfb9b23629e305d9c8eaa" target="_blank" rel="noopener" class="port-link">Investment-Grade SGD</a> · SGD 10.00K → <span class="pos">10.00K</span> (<span class="pos">0 SGD, +0.00%</span>) · 1 holdings</summary><style type="text/css">
+#T_eab33 tbody tr:nth-child(2) td {
+  font-weight: 600;
+  border-top: 2px solid #30363d;
+}
+</style>
+<table id="T_eab33" class="ds-table ds-holdings">
+  <thead>
+    <tr>
+      <th id="T_eab33_level0_col0" class="col_heading level0 col0" >Ticker</th>
+      <th id="T_eab33_level0_col1" class="col_heading level0 col1" >Asset · Region</th>
+      <th id="T_eab33_level0_col2" class="col_heading level0 col2" >Weight</th>
+      <th id="T_eab33_level0_col3" class="col_heading level0 col3" >Stmt value (SGD)</th>
+      <th id="T_eab33_level0_col4" class="col_heading level0 col4" >Stmt price (SGD)</th>
+      <th id="T_eab33_level0_col5" class="col_heading level0 col5" >Stmt date</th>
+      <th id="T_eab33_level0_col6" class="col_heading level0 col6" >Today price (SGD)</th>
+      <th id="T_eab33_level0_col7" class="col_heading level0 col7" >Today date</th>
+      <th id="T_eab33_level0_col8" class="col_heading level0 col8" >Δ%</th>
+      <th id="T_eab33_level0_col9" class="col_heading level0 col9" >Today value (SGD)</th>
+      <th id="T_eab33_level0_col10" class="col_heading level0 col10" >Δ value (SGD)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td id="T_eab33_row0_col0" class="data row0 col0" >MBH.SI</td>
+      <td id="T_eab33_row0_col1" class="data row0 col1" >Bond · Singapore</td>
+      <td id="T_eab33_row0_col2" class="data row0 col2" >100.00%</td>
+      <td id="T_eab33_row0_col3" class="data row0 col3" >10.00K</td>
+      <td id="T_eab33_row0_col4" class="data row0 col4" >1.0130</td>
+      <td id="T_eab33_row0_col5" class="data row0 col5" >2026-05-21</td>
+      <td id="T_eab33_row0_col6" class="data row0 col6" >1.0130</td>
+      <td id="T_eab33_row0_col7" class="data row0 col7" >2026-05-29</td>
+      <td id="T_eab33_row0_col8" class="data row0 col8" >+0.00%</td>
+      <td id="T_eab33_row0_col9" class="data row0 col9" >10.00K</td>
+      <td id="T_eab33_row0_col10" class="data row0 col10" >0</td>
+    </tr>
+    <tr>
+      <td id="T_eab33_row1_col0" class="data row1 col0" >Total</td>
+      <td id="T_eab33_row1_col1" class="data row1 col1" ></td>
+      <td id="T_eab33_row1_col2" class="data row1 col2" >100.00%</td>
+      <td id="T_eab33_row1_col3" class="data row1 col3" >10.00K</td>
+      <td id="T_eab33_row1_col4" class="data row1 col4" >—</td>
+      <td id="T_eab33_row1_col5" class="data row1 col5" >—</td>
+      <td id="T_eab33_row1_col6" class="data row1 col6" >—</td>
+      <td id="T_eab33_row1_col7" class="data row1 col7" >—</td>
+      <td id="T_eab33_row1_col8" class="data row1 col8" >+0.00%</td>
+      <td id="T_eab33_row1_col9" class="data row1 col9" >10.00K</td>
+      <td id="T_eab33_row1_col10" class="data row1 col10" >0</td>
+    </tr>
+  </tbody>
+</table>
+</details>
+<details class="drill"><summary><a href="https://app.stashaway.sg/goal/6a0dfb40261622dc933345b9" target="_blank" rel="noopener" class="port-link">Global Floating Rate USD</a> · SGD 10.00K → <span class="pos">10.00K</span> (<span class="pos">+4 SGD, +0.04%</span>) · 1 holdings</summary><style type="text/css">
+#T_c34ca tbody tr:nth-child(2) td {
+  font-weight: 600;
+  border-top: 2px solid #30363d;
+}
+#T_c34ca_row0_col8, #T_c34ca_row0_col10, #T_c34ca_row1_col8, #T_c34ca_row1_col10 {
+  background-color: rgba(63, 185, 80, 0.18);
+  color: #3fb950;
+}
+</style>
+<table id="T_c34ca" class="ds-table ds-holdings">
+  <thead>
+    <tr>
+      <th id="T_c34ca_level0_col0" class="col_heading level0 col0" >Ticker</th>
+      <th id="T_c34ca_level0_col1" class="col_heading level0 col1" >Asset · Region</th>
+      <th id="T_c34ca_level0_col2" class="col_heading level0 col2" >Weight</th>
+      <th id="T_c34ca_level0_col3" class="col_heading level0 col3" >Stmt value (SGD)</th>
+      <th id="T_c34ca_level0_col4" class="col_heading level0 col4" >Stmt price (SGD)</th>
+      <th id="T_c34ca_level0_col5" class="col_heading level0 col5" >Stmt date</th>
+      <th id="T_c34ca_level0_col6" class="col_heading level0 col6" >Today price (SGD)</th>
+      <th id="T_c34ca_level0_col7" class="col_heading level0 col7" >Today date</th>
+      <th id="T_c34ca_level0_col8" class="col_heading level0 col8" >Δ%</th>
+      <th id="T_c34ca_level0_col9" class="col_heading level0 col9" >Today value (SGD)</th>
+      <th id="T_c34ca_level0_col10" class="col_heading level0 col10" >Δ value (SGD)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td id="T_c34ca_row0_col0" class="data row0 col0" >FLOT</td>
+      <td id="T_c34ca_row0_col1" class="data row0 col1" >Bond · US</td>
+      <td id="T_c34ca_row0_col2" class="data row0 col2" >100.00%</td>
+      <td id="T_c34ca_row0_col3" class="data row0 col3" >10.00K</td>
+      <td id="T_c34ca_row0_col4" class="data row0 col4" >51.0200</td>
+      <td id="T_c34ca_row0_col5" class="data row0 col5" >2026-05-21</td>
+      <td id="T_c34ca_row0_col6" class="data row0 col6" >51.0400</td>
+      <td id="T_c34ca_row0_col7" class="data row0 col7" >2026-05-29</td>
+      <td id="T_c34ca_row0_col8" class="data row0 col8" >+0.04%</td>
+      <td id="T_c34ca_row0_col9" class="data row0 col9" >10.00K</td>
+      <td id="T_c34ca_row0_col10" class="data row0 col10" >+4</td>
+    </tr>
+    <tr>
+      <td id="T_c34ca_row1_col0" class="data row1 col0" >Total</td>
+      <td id="T_c34ca_row1_col1" class="data row1 col1" ></td>
+      <td id="T_c34ca_row1_col2" class="data row1 col2" >100.00%</td>
+      <td id="T_c34ca_row1_col3" class="data row1 col3" >10.00K</td>
+      <td id="T_c34ca_row1_col4" class="data row1 col4" >—</td>
+      <td id="T_c34ca_row1_col5" class="data row1 col5" >—</td>
+      <td id="T_c34ca_row1_col6" class="data row1 col6" >—</td>
+      <td id="T_c34ca_row1_col7" class="data row1 col7" >—</td>
+      <td id="T_c34ca_row1_col8" class="data row1 col8" >+0.04%</td>
+      <td id="T_c34ca_row1_col9" class="data row1 col9" >10.00K</td>
+      <td id="T_c34ca_row1_col10" class="data row1 col10" >+4</td>
+    </tr>
+  </tbody>
+</table>
+</details>
+<details class="drill"><summary><a href="https://app.stashaway.sg/goal/6a0df94c261622dc93333aa1" target="_blank" rel="noopener" class="port-link">Asia ex-Japan</a> · SGD 10.00K → <span class="pos">10.42K</span> (<span class="pos">+422 SGD, +4.22%</span>) · 1 holdings</summary><style type="text/css">
+#T_ca799 tbody tr:nth-child(2) td {
+  font-weight: 600;
+  border-top: 2px solid #30363d;
+}
+#T_ca799_row0_col8, #T_ca799_row0_col10, #T_ca799_row1_col8, #T_ca799_row1_col10 {
+  background-color: rgba(63, 185, 80, 0.18);
+  color: #3fb950;
+}
+</style>
+<table id="T_ca799" class="ds-table ds-holdings">
+  <thead>
+    <tr>
+      <th id="T_ca799_level0_col0" class="col_heading level0 col0" >Ticker</th>
+      <th id="T_ca799_level0_col1" class="col_heading level0 col1" >Asset · Region</th>
+      <th id="T_ca799_level0_col2" class="col_heading level0 col2" >Weight</th>
+      <th id="T_ca799_level0_col3" class="col_heading level0 col3" >Stmt value (SGD)</th>
+      <th id="T_ca799_level0_col4" class="col_heading level0 col4" >Stmt price (SGD)</th>
+      <th id="T_ca799_level0_col5" class="col_heading level0 col5" >Stmt date</th>
+      <th id="T_ca799_level0_col6" class="col_heading level0 col6" >Today price (SGD)</th>
+      <th id="T_ca799_level0_col7" class="col_heading level0 col7" >Today date</th>
+      <th id="T_ca799_level0_col8" class="col_heading level0 col8" >Δ%</th>
+      <th id="T_ca799_level0_col9" class="col_heading level0 col9" >Today value (SGD)</th>
+      <th id="T_ca799_level0_col10" class="col_heading level0 col10" >Δ value (SGD)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td id="T_ca799_row0_col0" class="data row0 col0" >AAXJ</td>
+      <td id="T_ca799_row0_col1" class="data row0 col1" >Equity · Asia ex-Japan</td>
+      <td id="T_ca799_row0_col2" class="data row0 col2" >100.00%</td>
+      <td id="T_ca799_row0_col3" class="data row0 col3" >10.00K</td>
+      <td id="T_ca799_row0_col4" class="data row0 col4" >114.2400</td>
+      <td id="T_ca799_row0_col5" class="data row0 col5" >2026-05-21</td>
+      <td id="T_ca799_row0_col6" class="data row0 col6" >119.0600</td>
+      <td id="T_ca799_row0_col7" class="data row0 col7" >2026-05-29</td>
+      <td id="T_ca799_row0_col8" class="data row0 col8" >+4.22%</td>
+      <td id="T_ca799_row0_col9" class="data row0 col9" >10.42K</td>
+      <td id="T_ca799_row0_col10" class="data row0 col10" >+422</td>
+    </tr>
+    <tr>
+      <td id="T_ca799_row1_col0" class="data row1 col0" >Total</td>
+      <td id="T_ca799_row1_col1" class="data row1 col1" ></td>
+      <td id="T_ca799_row1_col2" class="data row1 col2" >100.00%</td>
+      <td id="T_ca799_row1_col3" class="data row1 col3" >10.00K</td>
+      <td id="T_ca799_row1_col4" class="data row1 col4" >—</td>
+      <td id="T_ca799_row1_col5" class="data row1 col5" >—</td>
+      <td id="T_ca799_row1_col6" class="data row1 col6" >—</td>
+      <td id="T_ca799_row1_col7" class="data row1 col7" >—</td>
+      <td id="T_ca799_row1_col8" class="data row1 col8" >+4.22%</td>
+      <td id="T_ca799_row1_col9" class="data row1 col9" >10.42K</td>
+      <td id="T_ca799_row1_col10" class="data row1 col10" >+422</td>
+    </tr>
+  </tbody>
+</table>
+</details>
+<details class="drill"><summary><a href="https://app.stashaway.sg/goal/6a0df89d5cb1209b659c2b3e" target="_blank" rel="noopener" class="port-link">Japan Currency-hedged</a> · SGD 10.00K → <span class="pos">10.14K</span> (<span class="pos">+141 SGD, +1.41%</span>) · 1 holdings</summary><style type="text/css">
+#T_a944b tbody tr:nth-child(2) td {
+  font-weight: 600;
+  border-top: 2px solid #30363d;
+}
+#T_a944b_row0_col8, #T_a944b_row0_col10, #T_a944b_row1_col8, #T_a944b_row1_col10 {
+  background-color: rgba(63, 185, 80, 0.18);
+  color: #3fb950;
+}
+</style>
+<table id="T_a944b" class="ds-table ds-holdings">
+  <thead>
+    <tr>
+      <th id="T_a944b_level0_col0" class="col_heading level0 col0" >Ticker</th>
+      <th id="T_a944b_level0_col1" class="col_heading level0 col1" >Asset · Region</th>
+      <th id="T_a944b_level0_col2" class="col_heading level0 col2" >Weight</th>
+      <th id="T_a944b_level0_col3" class="col_heading level0 col3" >Stmt value (SGD)</th>
+      <th id="T_a944b_level0_col4" class="col_heading level0 col4" >Stmt price (SGD)</th>
+      <th id="T_a944b_level0_col5" class="col_heading level0 col5" >Stmt date</th>
+      <th id="T_a944b_level0_col6" class="col_heading level0 col6" >Today price (SGD)</th>
+      <th id="T_a944b_level0_col7" class="col_heading level0 col7" >Today date</th>
+      <th id="T_a944b_level0_col8" class="col_heading level0 col8" >Δ%</th>
+      <th id="T_a944b_level0_col9" class="col_heading level0 col9" >Today value (SGD)</th>
+      <th id="T_a944b_level0_col10" class="col_heading level0 col10" >Δ value (SGD)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td id="T_a944b_row0_col0" class="data row0 col0" >DXJ</td>
+      <td id="T_a944b_row0_col1" class="data row0 col1" >Equity · Japan</td>
+      <td id="T_a944b_row0_col2" class="data row0 col2" >100.00%</td>
+      <td id="T_a944b_row0_col3" class="data row0 col3" >10.00K</td>
+      <td id="T_a944b_row0_col4" class="data row0 col4" >169.1400</td>
+      <td id="T_a944b_row0_col5" class="data row0 col5" >2026-05-21</td>
+      <td id="T_a944b_row0_col6" class="data row0 col6" >171.5200</td>
+      <td id="T_a944b_row0_col7" class="data row0 col7" >2026-05-29</td>
+      <td id="T_a944b_row0_col8" class="data row0 col8" >+1.41%</td>
+      <td id="T_a944b_row0_col9" class="data row0 col9" >10.14K</td>
+      <td id="T_a944b_row0_col10" class="data row0 col10" >+141</td>
+    </tr>
+    <tr>
+      <td id="T_a944b_row1_col0" class="data row1 col0" >Total</td>
+      <td id="T_a944b_row1_col1" class="data row1 col1" ></td>
+      <td id="T_a944b_row1_col2" class="data row1 col2" >100.00%</td>
+      <td id="T_a944b_row1_col3" class="data row1 col3" >10.00K</td>
+      <td id="T_a944b_row1_col4" class="data row1 col4" >—</td>
+      <td id="T_a944b_row1_col5" class="data row1 col5" >—</td>
+      <td id="T_a944b_row1_col6" class="data row1 col6" >—</td>
+      <td id="T_a944b_row1_col7" class="data row1 col7" >—</td>
+      <td id="T_a944b_row1_col8" class="data row1 col8" >+1.41%</td>
+      <td id="T_a944b_row1_col9" class="data row1 col9" >10.14K</td>
+      <td id="T_a944b_row1_col10" class="data row1 col10" >+141</td>
+    </tr>
+  </tbody>
+</table>
+</details>
+<details class="drill"><summary><a href="https://app.stashaway.sg/goal/6a1486d5a31c613c41881936" target="_blank" rel="noopener" class="port-link">Longevity Stack</a> · SGD 10.00K → <span class="pos">10.31K</span> (<span class="pos">+315 SGD, +3.15%</span>) · 3 holdings</summary><style type="text/css">
+#T_62866 tbody tr:nth-child(4) td {
+  font-weight: 600;
+  border-top: 2px solid #30363d;
+}
+#T_62866_row0_col8, #T_62866_row0_col10, #T_62866_row1_col8, #T_62866_row1_col10, #T_62866_row3_col8, #T_62866_row3_col10 {
+  background-color: rgba(63, 185, 80, 0.18);
+  color: #3fb950;
+}
+</style>
+<table id="T_62866" class="ds-table ds-holdings">
+  <thead>
+    <tr>
+      <th id="T_62866_level0_col0" class="col_heading level0 col0" >Ticker</th>
+      <th id="T_62866_level0_col1" class="col_heading level0 col1" >Asset · Region</th>
+      <th id="T_62866_level0_col2" class="col_heading level0 col2" >Weight</th>
+      <th id="T_62866_level0_col3" class="col_heading level0 col3" >Stmt value (SGD)</th>
+      <th id="T_62866_level0_col4" class="col_heading level0 col4" >Stmt price (SGD)</th>
+      <th id="T_62866_level0_col5" class="col_heading level0 col5" >Stmt date</th>
+      <th id="T_62866_level0_col6" class="col_heading level0 col6" >Today price (SGD)</th>
+      <th id="T_62866_level0_col7" class="col_heading level0 col7" >Today date</th>
+      <th id="T_62866_level0_col8" class="col_heading level0 col8" >Δ%</th>
+      <th id="T_62866_level0_col9" class="col_heading level0 col9" >Today value (SGD)</th>
+      <th id="T_62866_level0_col10" class="col_heading level0 col10" >Δ value (SGD)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td id="T_62866_row0_col0" class="data row0 col0" >XLV</td>
+      <td id="T_62866_row0_col1" class="data row0 col1" >Equity · US</td>
+      <td id="T_62866_row0_col2" class="data row0 col2" >74.00%</td>
+      <td id="T_62866_row0_col3" class="data row0 col3" >7.40K</td>
+      <td id="T_62866_row0_col4" class="data row0 col4" >148.5100</td>
+      <td id="T_62866_row0_col5" class="data row0 col5" >2026-05-26</td>
+      <td id="T_62866_row0_col6" class="data row0 col6" >149.4700</td>
+      <td id="T_62866_row0_col7" class="data row0 col7" >2026-05-29</td>
+      <td id="T_62866_row0_col8" class="data row0 col8" >+0.65%</td>
+      <td id="T_62866_row0_col9" class="data row0 col9" >7.45K</td>
+      <td id="T_62866_row0_col10" class="data row0 col10" >+48</td>
+    </tr>
+    <tr>
+      <td id="T_62866_row1_col0" class="data row1 col0" >ARKG</td>
+      <td id="T_62866_row1_col1" class="data row1 col1" >Equity · US</td>
+      <td id="T_62866_row1_col2" class="data row1 col2" >25.00%</td>
+      <td id="T_62866_row1_col3" class="data row1 col3" >2.50K</td>
+      <td id="T_62866_row1_col4" class="data row1 col4" >31.3000</td>
+      <td id="T_62866_row1_col5" class="data row1 col5" >2026-05-26</td>
+      <td id="T_62866_row1_col6" class="data row1 col6" >34.6400</td>
+      <td id="T_62866_row1_col7" class="data row1 col7" >2026-05-29</td>
+      <td id="T_62866_row1_col8" class="data row1 col8" >+10.67%</td>
+      <td id="T_62866_row1_col9" class="data row1 col9" >2.77K</td>
+      <td id="T_62866_row1_col10" class="data row1 col10" >+267</td>
+    </tr>
+    <tr>
+      <td id="T_62866_row2_col0" class="data row2 col0" >CASH_SGD</td>
+      <td id="T_62866_row2_col1" class="data row2 col1" >Cash · Singapore</td>
+      <td id="T_62866_row2_col2" class="data row2 col2" >1.00%</td>
+      <td id="T_62866_row2_col3" class="data row2 col3" >100</td>
+      <td id="T_62866_row2_col4" class="data row2 col4" >—</td>
+      <td id="T_62866_row2_col5" class="data row2 col5" >2026-05-26</td>
+      <td id="T_62866_row2_col6" class="data row2 col6" >—</td>
+      <td id="T_62866_row2_col7" class="data row2 col7" >2026-05-29</td>
+      <td id="T_62866_row2_col8" class="data row2 col8" >+0.00%</td>
+      <td id="T_62866_row2_col9" class="data row2 col9" >100</td>
+      <td id="T_62866_row2_col10" class="data row2 col10" >0</td>
+    </tr>
+    <tr>
+      <td id="T_62866_row3_col0" class="data row3 col0" >Total</td>
+      <td id="T_62866_row3_col1" class="data row3 col1" ></td>
+      <td id="T_62866_row3_col2" class="data row3 col2" >100.00%</td>
+      <td id="T_62866_row3_col3" class="data row3 col3" >10.00K</td>
+      <td id="T_62866_row3_col4" class="data row3 col4" >—</td>
+      <td id="T_62866_row3_col5" class="data row3 col5" >—</td>
+      <td id="T_62866_row3_col6" class="data row3 col6" >—</td>
+      <td id="T_62866_row3_col7" class="data row3 col7" >—</td>
+      <td id="T_62866_row3_col8" class="data row3 col8" >+3.15%</td>
+      <td id="T_62866_row3_col9" class="data row3 col9" >10.31K</td>
+      <td id="T_62866_row3_col10" class="data row3 col10" >+315</td>
+    </tr>
+  </tbody>
+</table>
+</details>
+<details class="drill"><summary><a href="https://app.stashaway.sg/goal/6a1482d1a31c613c4187fbb6" target="_blank" rel="noopener" class="port-link">The AI Power Stack</a> · SGD 10.00K → <span class="neg">9.90K</span> (<span class="neg">-104 SGD, -1.04%</span>) · 3 holdings</summary><style type="text/css">
+#T_87cf3 tbody tr:nth-child(4) td {
+  font-weight: 600;
+  border-top: 2px solid #30363d;
+}
+#T_87cf3_row0_col8, #T_87cf3_row0_col10, #T_87cf3_row1_col8, #T_87cf3_row1_col10, #T_87cf3_row3_col8, #T_87cf3_row3_col10 {
+  background-color: rgba(248, 81, 73, 0.18);
+  color: #f85149;
+}
+</style>
+<table id="T_87cf3" class="ds-table ds-holdings">
+  <thead>
+    <tr>
+      <th id="T_87cf3_level0_col0" class="col_heading level0 col0" >Ticker</th>
+      <th id="T_87cf3_level0_col1" class="col_heading level0 col1" >Asset · Region</th>
+      <th id="T_87cf3_level0_col2" class="col_heading level0 col2" >Weight</th>
+      <th id="T_87cf3_level0_col3" class="col_heading level0 col3" >Stmt value (SGD)</th>
+      <th id="T_87cf3_level0_col4" class="col_heading level0 col4" >Stmt price (SGD)</th>
+      <th id="T_87cf3_level0_col5" class="col_heading level0 col5" >Stmt date</th>
+      <th id="T_87cf3_level0_col6" class="col_heading level0 col6" >Today price (SGD)</th>
+      <th id="T_87cf3_level0_col7" class="col_heading level0 col7" >Today date</th>
+      <th id="T_87cf3_level0_col8" class="col_heading level0 col8" >Δ%</th>
+      <th id="T_87cf3_level0_col9" class="col_heading level0 col9" >Today value (SGD)</th>
+      <th id="T_87cf3_level0_col10" class="col_heading level0 col10" >Δ value (SGD)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td id="T_87cf3_row0_col0" class="data row0 col0" >SMH</td>
+      <td id="T_87cf3_row0_col1" class="data row0 col1" >Equity · US</td>
+      <td id="T_87cf3_row0_col2" class="data row0 col2" >64.00%</td>
+      <td id="T_87cf3_row0_col3" class="data row0 col3" >6.40K</td>
+      <td id="T_87cf3_row0_col4" class="data row0 col4" >602.1400</td>
+      <td id="T_87cf3_row0_col5" class="data row0 col5" >2026-05-26</td>
+      <td id="T_87cf3_row0_col6" class="data row0 col6" >598.9300</td>
+      <td id="T_87cf3_row0_col7" class="data row0 col7" >2026-05-29</td>
+      <td id="T_87cf3_row0_col8" class="data row0 col8" >-0.53%</td>
+      <td id="T_87cf3_row0_col9" class="data row0 col9" >6.37K</td>
+      <td id="T_87cf3_row0_col10" class="data row0 col10" >-34</td>
+    </tr>
+    <tr>
+      <td id="T_87cf3_row1_col0" class="data row1 col0" >GRID</td>
+      <td id="T_87cf3_row1_col1" class="data row1 col1" >Equity · US</td>
+      <td id="T_87cf3_row1_col2" class="data row1 col2" >35.00%</td>
+      <td id="T_87cf3_row1_col3" class="data row1 col3" >3.50K</td>
+      <td id="T_87cf3_row1_col4" class="data row1 col4" >197.0200</td>
+      <td id="T_87cf3_row1_col5" class="data row1 col5" >2026-05-26</td>
+      <td id="T_87cf3_row1_col6" class="data row1 col6" >193.0700</td>
+      <td id="T_87cf3_row1_col7" class="data row1 col7" >2026-05-29</td>
+      <td id="T_87cf3_row1_col8" class="data row1 col8" >-2.00%</td>
+      <td id="T_87cf3_row1_col9" class="data row1 col9" >3.43K</td>
+      <td id="T_87cf3_row1_col10" class="data row1 col10" >-70</td>
+    </tr>
+    <tr>
+      <td id="T_87cf3_row2_col0" class="data row2 col0" >CASH_SGD</td>
+      <td id="T_87cf3_row2_col1" class="data row2 col1" >Cash · Singapore</td>
+      <td id="T_87cf3_row2_col2" class="data row2 col2" >1.00%</td>
+      <td id="T_87cf3_row2_col3" class="data row2 col3" >100</td>
+      <td id="T_87cf3_row2_col4" class="data row2 col4" >—</td>
+      <td id="T_87cf3_row2_col5" class="data row2 col5" >2026-05-26</td>
+      <td id="T_87cf3_row2_col6" class="data row2 col6" >—</td>
+      <td id="T_87cf3_row2_col7" class="data row2 col7" >2026-05-29</td>
+      <td id="T_87cf3_row2_col8" class="data row2 col8" >+0.00%</td>
+      <td id="T_87cf3_row2_col9" class="data row2 col9" >100</td>
+      <td id="T_87cf3_row2_col10" class="data row2 col10" >0</td>
+    </tr>
+    <tr>
+      <td id="T_87cf3_row3_col0" class="data row3 col0" >Total</td>
+      <td id="T_87cf3_row3_col1" class="data row3 col1" ></td>
+      <td id="T_87cf3_row3_col2" class="data row3 col2" >100.00%</td>
+      <td id="T_87cf3_row3_col3" class="data row3 col3" >10.00K</td>
+      <td id="T_87cf3_row3_col4" class="data row3 col4" >—</td>
+      <td id="T_87cf3_row3_col5" class="data row3 col5" >—</td>
+      <td id="T_87cf3_row3_col6" class="data row3 col6" >—</td>
+      <td id="T_87cf3_row3_col7" class="data row3 col7" >—</td>
+      <td id="T_87cf3_row3_col8" class="data row3 col8" >-1.04%</td>
+      <td id="T_87cf3_row3_col9" class="data row3 col9" >9.90K</td>
+      <td id="T_87cf3_row3_col10" class="data row3 col10" >-104</td>
+    </tr>
+  </tbody>
+</table>
+</details>
+<details class="drill"><summary><a href="https://app.stashaway.sg/goal/69e0ca4a2c493b0e78e5e35b" target="_blank" rel="noopener" class="port-link">SG ETF</a> · SGD 9.86K → <span class="pos">10.22K</span> (<span class="pos">+359 SGD, +3.64%</span>) · 2 holdings</summary><style type="text/css">
+#T_f1d00 tbody tr:nth-child(3) td {
+  font-weight: 600;
+  border-top: 2px solid #30363d;
+}
+#T_f1d00_row0_col8, #T_f1d00_row0_col10, #T_f1d00_row2_col8, #T_f1d00_row2_col10 {
+  background-color: rgba(63, 185, 80, 0.18);
+  color: #3fb950;
+}
+</style>
+<table id="T_f1d00" class="ds-table ds-holdings">
+  <thead>
+    <tr>
+      <th id="T_f1d00_level0_col0" class="col_heading level0 col0" >Ticker</th>
+      <th id="T_f1d00_level0_col1" class="col_heading level0 col1" >Asset · Region</th>
+      <th id="T_f1d00_level0_col2" class="col_heading level0 col2" >Weight</th>
+      <th id="T_f1d00_level0_col3" class="col_heading level0 col3" >Stmt value (SGD)</th>
+      <th id="T_f1d00_level0_col4" class="col_heading level0 col4" >Stmt price (SGD)</th>
+      <th id="T_f1d00_level0_col5" class="col_heading level0 col5" >Stmt date</th>
+      <th id="T_f1d00_level0_col6" class="col_heading level0 col6" >Today price (SGD)</th>
+      <th id="T_f1d00_level0_col7" class="col_heading level0 col7" >Today date</th>
+      <th id="T_f1d00_level0_col8" class="col_heading level0 col8" >Δ%</th>
+      <th id="T_f1d00_level0_col9" class="col_heading level0 col9" >Today value (SGD)</th>
+      <th id="T_f1d00_level0_col10" class="col_heading level0 col10" >Δ value (SGD)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td id="T_f1d00_row0_col0" class="data row0 col0" >G3B.SI</td>
+      <td id="T_f1d00_row0_col1" class="data row0 col1" >Equity · Singapore</td>
+      <td id="T_f1d00_row0_col2" class="data row0 col2" >100.00%</td>
+      <td id="T_f1d00_row0_col3" class="data row0 col3" >9.86K</td>
+      <td id="T_f1d00_row0_col4" class="data row0 col4" >5.0570</td>
+      <td id="T_f1d00_row0_col5" class="data row0 col5" >2026-04-30</td>
+      <td id="T_f1d00_row0_col6" class="data row0 col6" >5.2410</td>
+      <td id="T_f1d00_row0_col7" class="data row0 col7" >2026-05-29</td>
+      <td id="T_f1d00_row0_col8" class="data row0 col8" >+3.64%</td>
+      <td id="T_f1d00_row0_col9" class="data row0 col9" >10.22K</td>
+      <td id="T_f1d00_row0_col10" class="data row0 col10" >+359</td>
+    </tr>
+    <tr>
+      <td id="T_f1d00_row1_col0" class="data row1 col0" >CASH_SGD</td>
+      <td id="T_f1d00_row1_col1" class="data row1 col1" >Cash · Singapore</td>
+      <td id="T_f1d00_row1_col2" class="data row1 col2" >0.00%</td>
+      <td id="T_f1d00_row1_col3" class="data row1 col3" >0</td>
+      <td id="T_f1d00_row1_col4" class="data row1 col4" >—</td>
+      <td id="T_f1d00_row1_col5" class="data row1 col5" >2026-04-30</td>
+      <td id="T_f1d00_row1_col6" class="data row1 col6" >—</td>
+      <td id="T_f1d00_row1_col7" class="data row1 col7" >2026-05-29</td>
+      <td id="T_f1d00_row1_col8" class="data row1 col8" >+0.00%</td>
+      <td id="T_f1d00_row1_col9" class="data row1 col9" >0</td>
+      <td id="T_f1d00_row1_col10" class="data row1 col10" >0</td>
+    </tr>
+    <tr>
+      <td id="T_f1d00_row2_col0" class="data row2 col0" >Total</td>
+      <td id="T_f1d00_row2_col1" class="data row2 col1" ></td>
+      <td id="T_f1d00_row2_col2" class="data row2 col2" >100.00%</td>
+      <td id="T_f1d00_row2_col3" class="data row2 col3" >9.86K</td>
+      <td id="T_f1d00_row2_col4" class="data row2 col4" >—</td>
+      <td id="T_f1d00_row2_col5" class="data row2 col5" >—</td>
+      <td id="T_f1d00_row2_col6" class="data row2 col6" >—</td>
+      <td id="T_f1d00_row2_col7" class="data row2 col7" >—</td>
+      <td id="T_f1d00_row2_col8" class="data row2 col8" >+3.64%</td>
+      <td id="T_f1d00_row2_col9" class="data row2 col9" >10.22K</td>
+      <td id="T_f1d00_row2_col10" class="data row2 col10" >+359</td>
+    </tr>
+  </tbody>
+</table>
+</details>
+<details class="drill"><summary><a href="https://app.stashaway.sg/goal/69aec8761085ac2dc21016ed" target="_blank" rel="noopener" class="port-link">Energy</a> · USD 8.22K → <span class="neg">7.76K</span> (<span class="neg">-463 USD / -565 SGD, -5.63%</span>) · 2 holdings</summary><style type="text/css">
+#T_8754a tbody tr:nth-child(3) td {
+  font-weight: 600;
+  border-top: 2px solid #30363d;
+}
+#T_8754a_row0_col8, #T_8754a_row0_col10, #T_8754a_row0_col13, #T_8754a_row2_col8, #T_8754a_row2_col10, #T_8754a_row2_col13 {
+  background-color: rgba(248, 81, 73, 0.18);
+  color: #f85149;
+}
+#T_8754a_row1_col13 {
+  background-color: rgba(63, 185, 80, 0.18);
+  color: #3fb950;
+}
+</style>
+<table id="T_8754a" class="ds-table ds-holdings">
+  <thead>
+    <tr>
+      <th id="T_8754a_level0_col0" class="col_heading level0 col0" >Ticker</th>
+      <th id="T_8754a_level0_col1" class="col_heading level0 col1" >Asset · Region</th>
+      <th id="T_8754a_level0_col2" class="col_heading level0 col2" >Weight</th>
+      <th id="T_8754a_level0_col3" class="col_heading level0 col3" >Stmt value (USD)</th>
+      <th id="T_8754a_level0_col4" class="col_heading level0 col4" >Stmt price (USD)</th>
+      <th id="T_8754a_level0_col5" class="col_heading level0 col5" >Stmt date</th>
+      <th id="T_8754a_level0_col6" class="col_heading level0 col6" >Today price (USD)</th>
+      <th id="T_8754a_level0_col7" class="col_heading level0 col7" >Today date</th>
+      <th id="T_8754a_level0_col8" class="col_heading level0 col8" >Δ%</th>
+      <th id="T_8754a_level0_col9" class="col_heading level0 col9" >Today value (USD)</th>
+      <th id="T_8754a_level0_col10" class="col_heading level0 col10" >Δ value (USD)</th>
+      <th id="T_8754a_level0_col11" class="col_heading level0 col11" >Stmt value (SGD)</th>
+      <th id="T_8754a_level0_col12" class="col_heading level0 col12" >Today value (SGD)</th>
+      <th id="T_8754a_level0_col13" class="col_heading level0 col13" >Δ value (SGD)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td id="T_8754a_row0_col0" class="data row0 col0" >XLE</td>
+      <td id="T_8754a_row0_col1" class="data row0 col1" >Equity · US</td>
+      <td id="T_8754a_row0_col2" class="data row0 col2" >99.99%</td>
+      <td id="T_8754a_row0_col3" class="data row0 col3" >8.22K</td>
+      <td id="T_8754a_row0_col4" class="data row0 col4" >59.6500</td>
+      <td id="T_8754a_row0_col5" class="data row0 col5" >2026-04-30</td>
+      <td id="T_8754a_row0_col6" class="data row0 col6" >56.2900</td>
+      <td id="T_8754a_row0_col7" class="data row0 col7" >2026-05-29</td>
+      <td id="T_8754a_row0_col8" class="data row0 col8" >-5.63%</td>
+      <td id="T_8754a_row0_col9" class="data row0 col9" >7.76K</td>
+      <td id="T_8754a_row0_col10" class="data row0 col10" >-463</td>
+      <td id="T_8754a_row0_col11" class="data row0 col11" >10.47K</td>
+      <td id="T_8754a_row0_col12" class="data row0 col12" >9.90K</td>
+      <td id="T_8754a_row0_col13" class="data row0 col13" >-565</td>
+    </tr>
+    <tr>
+      <td id="T_8754a_row1_col0" class="data row1 col0" >CASH_USD</td>
+      <td id="T_8754a_row1_col1" class="data row1 col1" >Cash · US</td>
+      <td id="T_8754a_row1_col2" class="data row1 col2" >0.01%</td>
+      <td id="T_8754a_row1_col3" class="data row1 col3" >1</td>
+      <td id="T_8754a_row1_col4" class="data row1 col4" >—</td>
+      <td id="T_8754a_row1_col5" class="data row1 col5" >2026-04-30</td>
+      <td id="T_8754a_row1_col6" class="data row1 col6" >—</td>
+      <td id="T_8754a_row1_col7" class="data row1 col7" >2026-05-29</td>
+      <td id="T_8754a_row1_col8" class="data row1 col8" >+0.00%</td>
+      <td id="T_8754a_row1_col9" class="data row1 col9" >1</td>
+      <td id="T_8754a_row1_col10" class="data row1 col10" >0</td>
+      <td id="T_8754a_row1_col11" class="data row1 col11" >1</td>
+      <td id="T_8754a_row1_col12" class="data row1 col12" >1</td>
+      <td id="T_8754a_row1_col13" class="data row1 col13" >+0</td>
+    </tr>
+    <tr>
+      <td id="T_8754a_row2_col0" class="data row2 col0" >Total</td>
+      <td id="T_8754a_row2_col1" class="data row2 col1" ></td>
+      <td id="T_8754a_row2_col2" class="data row2 col2" >100.00%</td>
+      <td id="T_8754a_row2_col3" class="data row2 col3" >8.22K</td>
+      <td id="T_8754a_row2_col4" class="data row2 col4" >—</td>
+      <td id="T_8754a_row2_col5" class="data row2 col5" >—</td>
+      <td id="T_8754a_row2_col6" class="data row2 col6" >—</td>
+      <td id="T_8754a_row2_col7" class="data row2 col7" >—</td>
+      <td id="T_8754a_row2_col8" class="data row2 col8" >-5.63%</td>
+      <td id="T_8754a_row2_col9" class="data row2 col9" >7.76K</td>
+      <td id="T_8754a_row2_col10" class="data row2 col10" >-463</td>
+      <td id="T_8754a_row2_col11" class="data row2 col11" >10.47K</td>
+      <td id="T_8754a_row2_col12" class="data row2 col12" >9.90K</td>
+      <td id="T_8754a_row2_col13" class="data row2 col13" >-565</td>
+    </tr>
+  </tbody>
+</table>
+</details>
+<details class="drill"><summary><a href="https://app.stashaway.sg/goal/69e0cc02a16abfe399b9936d" target="_blank" rel="noopener" class="port-link">Nasdaq Covered Call</a> · USD 7.89K → <span class="pos">8.24K</span> (<span class="pos">+351 USD / +473 SGD, +4.44%</span>) · 2 holdings</summary><style type="text/css">
+#T_29bee tbody tr:nth-child(3) td {
+  font-weight: 600;
+  border-top: 2px solid #30363d;
+}
+#T_29bee_row0_col8, #T_29bee_row0_col10, #T_29bee_row0_col13, #T_29bee_row1_col13, #T_29bee_row2_col8, #T_29bee_row2_col10, #T_29bee_row2_col13 {
+  background-color: rgba(63, 185, 80, 0.18);
+  color: #3fb950;
+}
+</style>
+<table id="T_29bee" class="ds-table ds-holdings">
+  <thead>
+    <tr>
+      <th id="T_29bee_level0_col0" class="col_heading level0 col0" >Ticker</th>
+      <th id="T_29bee_level0_col1" class="col_heading level0 col1" >Asset · Region</th>
+      <th id="T_29bee_level0_col2" class="col_heading level0 col2" >Weight</th>
+      <th id="T_29bee_level0_col3" class="col_heading level0 col3" >Stmt value (USD)</th>
+      <th id="T_29bee_level0_col4" class="col_heading level0 col4" >Stmt price (USD)</th>
+      <th id="T_29bee_level0_col5" class="col_heading level0 col5" >Stmt date</th>
+      <th id="T_29bee_level0_col6" class="col_heading level0 col6" >Today price (USD)</th>
+      <th id="T_29bee_level0_col7" class="col_heading level0 col7" >Today date</th>
+      <th id="T_29bee_level0_col8" class="col_heading level0 col8" >Δ%</th>
+      <th id="T_29bee_level0_col9" class="col_heading level0 col9" >Today value (USD)</th>
+      <th id="T_29bee_level0_col10" class="col_heading level0 col10" >Δ value (USD)</th>
+      <th id="T_29bee_level0_col11" class="col_heading level0 col11" >Stmt value (SGD)</th>
+      <th id="T_29bee_level0_col12" class="col_heading level0 col12" >Today value (SGD)</th>
+      <th id="T_29bee_level0_col13" class="col_heading level0 col13" >Δ value (SGD)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td id="T_29bee_row0_col0" class="data row0 col0" >JEPQ.L</td>
+      <td id="T_29bee_row0_col1" class="data row0 col1" >Equity · US</td>
+      <td id="T_29bee_row0_col2" class="data row0 col2" >100.00%</td>
+      <td id="T_29bee_row0_col3" class="data row0 col3" >7.89K</td>
+      <td id="T_29bee_row0_col4" class="data row0 col4" >26.4594</td>
+      <td id="T_29bee_row0_col5" class="data row0 col5" >2026-04-30</td>
+      <td id="T_29bee_row0_col6" class="data row0 col6" >27.6350</td>
+      <td id="T_29bee_row0_col7" class="data row0 col7" >2026-05-29</td>
+      <td id="T_29bee_row0_col8" class="data row0 col8" >+4.44%</td>
+      <td id="T_29bee_row0_col9" class="data row0 col9" >8.24K</td>
+      <td id="T_29bee_row0_col10" class="data row0 col10" >+351</td>
+      <td id="T_29bee_row0_col11" class="data row0 col11" >10.05K</td>
+      <td id="T_29bee_row0_col12" class="data row0 col12" >10.52K</td>
+      <td id="T_29bee_row0_col13" class="data row0 col13" >+473</td>
+    </tr>
+    <tr>
+      <td id="T_29bee_row1_col0" class="data row1 col0" >CASH_USD</td>
+      <td id="T_29bee_row1_col1" class="data row1 col1" >Cash · US</td>
+      <td id="T_29bee_row1_col2" class="data row1 col2" >0.00%</td>
+      <td id="T_29bee_row1_col3" class="data row1 col3" >0</td>
+      <td id="T_29bee_row1_col4" class="data row1 col4" >—</td>
+      <td id="T_29bee_row1_col5" class="data row1 col5" >2026-04-30</td>
+      <td id="T_29bee_row1_col6" class="data row1 col6" >—</td>
+      <td id="T_29bee_row1_col7" class="data row1 col7" >2026-05-29</td>
+      <td id="T_29bee_row1_col8" class="data row1 col8" >+0.00%</td>
+      <td id="T_29bee_row1_col9" class="data row1 col9" >0</td>
+      <td id="T_29bee_row1_col10" class="data row1 col10" >0</td>
+      <td id="T_29bee_row1_col11" class="data row1 col11" >0</td>
+      <td id="T_29bee_row1_col12" class="data row1 col12" >0</td>
+      <td id="T_29bee_row1_col13" class="data row1 col13" >+0</td>
+    </tr>
+    <tr>
+      <td id="T_29bee_row2_col0" class="data row2 col0" >Total</td>
+      <td id="T_29bee_row2_col1" class="data row2 col1" ></td>
+      <td id="T_29bee_row2_col2" class="data row2 col2" >100.00%</td>
+      <td id="T_29bee_row2_col3" class="data row2 col3" >7.89K</td>
+      <td id="T_29bee_row2_col4" class="data row2 col4" >—</td>
+      <td id="T_29bee_row2_col5" class="data row2 col5" >—</td>
+      <td id="T_29bee_row2_col6" class="data row2 col6" >—</td>
+      <td id="T_29bee_row2_col7" class="data row2 col7" >—</td>
+      <td id="T_29bee_row2_col8" class="data row2 col8" >+4.44%</td>
+      <td id="T_29bee_row2_col9" class="data row2 col9" >8.24K</td>
+      <td id="T_29bee_row2_col10" class="data row2 col10" >+351</td>
+      <td id="T_29bee_row2_col11" class="data row2 col11" >10.05K</td>
+      <td id="T_29bee_row2_col12" class="data row2 col12" >10.52K</td>
+      <td id="T_29bee_row2_col13" class="data row2 col13" >+473</td>
+    </tr>
+  </tbody>
+</table>
+</details>
+<details class="drill"><summary><a href="https://app.stashaway.sg/goal/69ee58cf93f415879e42b5c1" target="_blank" rel="noopener" class="port-link">Ex-US Large-cap</a> · USD 7.86K → <span class="pos">8.16K</span> (<span class="pos">+299 USD / +407 SGD, +3.81%</span>) · 2 holdings</summary><style type="text/css">
+#T_74d27 tbody tr:nth-child(3) td {
+  font-weight: 600;
+  border-top: 2px solid #30363d;
+}
+#T_74d27_row0_col8, #T_74d27_row0_col10, #T_74d27_row0_col13, #T_74d27_row1_col13, #T_74d27_row2_col8, #T_74d27_row2_col10, #T_74d27_row2_col13 {
+  background-color: rgba(63, 185, 80, 0.18);
+  color: #3fb950;
+}
+</style>
+<table id="T_74d27" class="ds-table ds-holdings">
+  <thead>
+    <tr>
+      <th id="T_74d27_level0_col0" class="col_heading level0 col0" >Ticker</th>
+      <th id="T_74d27_level0_col1" class="col_heading level0 col1" >Asset · Region</th>
+      <th id="T_74d27_level0_col2" class="col_heading level0 col2" >Weight</th>
+      <th id="T_74d27_level0_col3" class="col_heading level0 col3" >Stmt value (USD)</th>
+      <th id="T_74d27_level0_col4" class="col_heading level0 col4" >Stmt price (USD)</th>
+      <th id="T_74d27_level0_col5" class="col_heading level0 col5" >Stmt date</th>
+      <th id="T_74d27_level0_col6" class="col_heading level0 col6" >Today price (USD)</th>
+      <th id="T_74d27_level0_col7" class="col_heading level0 col7" >Today date</th>
+      <th id="T_74d27_level0_col8" class="col_heading level0 col8" >Δ%</th>
+      <th id="T_74d27_level0_col9" class="col_heading level0 col9" >Today value (USD)</th>
+      <th id="T_74d27_level0_col10" class="col_heading level0 col10" >Δ value (USD)</th>
+      <th id="T_74d27_level0_col11" class="col_heading level0 col11" >Stmt value (SGD)</th>
+      <th id="T_74d27_level0_col12" class="col_heading level0 col12" >Today value (SGD)</th>
+      <th id="T_74d27_level0_col13" class="col_heading level0 col13" >Δ value (SGD)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td id="T_74d27_row0_col0" class="data row0 col0" >VEU</td>
+      <td id="T_74d27_row0_col1" class="data row0 col1" >Equity · Developed ex-US</td>
+      <td id="T_74d27_row0_col2" class="data row0 col2" >100.00%</td>
+      <td id="T_74d27_row0_col3" class="data row0 col3" >7.86K</td>
+      <td id="T_74d27_row0_col4" class="data row0 col4" >80.9200</td>
+      <td id="T_74d27_row0_col5" class="data row0 col5" >2026-04-30</td>
+      <td id="T_74d27_row0_col6" class="data row0 col6" >84.0000</td>
+      <td id="T_74d27_row0_col7" class="data row0 col7" >2026-05-29</td>
+      <td id="T_74d27_row0_col8" class="data row0 col8" >+3.81%</td>
+      <td id="T_74d27_row0_col9" class="data row0 col9" >8.16K</td>
+      <td id="T_74d27_row0_col10" class="data row0 col10" >+299</td>
+      <td id="T_74d27_row0_col11" class="data row0 col11" >10.01K</td>
+      <td id="T_74d27_row0_col12" class="data row0 col12" >10.42K</td>
+      <td id="T_74d27_row0_col13" class="data row0 col13" >+407</td>
+    </tr>
+    <tr>
+      <td id="T_74d27_row1_col0" class="data row1 col0" >CASH_USD</td>
+      <td id="T_74d27_row1_col1" class="data row1 col1" >Cash · US</td>
+      <td id="T_74d27_row1_col2" class="data row1 col2" >0.00%</td>
+      <td id="T_74d27_row1_col3" class="data row1 col3" >0</td>
+      <td id="T_74d27_row1_col4" class="data row1 col4" >—</td>
+      <td id="T_74d27_row1_col5" class="data row1 col5" >2026-04-30</td>
+      <td id="T_74d27_row1_col6" class="data row1 col6" >—</td>
+      <td id="T_74d27_row1_col7" class="data row1 col7" >2026-05-29</td>
+      <td id="T_74d27_row1_col8" class="data row1 col8" >+0.00%</td>
+      <td id="T_74d27_row1_col9" class="data row1 col9" >0</td>
+      <td id="T_74d27_row1_col10" class="data row1 col10" >0</td>
+      <td id="T_74d27_row1_col11" class="data row1 col11" >0</td>
+      <td id="T_74d27_row1_col12" class="data row1 col12" >0</td>
+      <td id="T_74d27_row1_col13" class="data row1 col13" >+0</td>
+    </tr>
+    <tr>
+      <td id="T_74d27_row2_col0" class="data row2 col0" >Total</td>
+      <td id="T_74d27_row2_col1" class="data row2 col1" ></td>
+      <td id="T_74d27_row2_col2" class="data row2 col2" >100.00%</td>
+      <td id="T_74d27_row2_col3" class="data row2 col3" >7.86K</td>
+      <td id="T_74d27_row2_col4" class="data row2 col4" >—</td>
+      <td id="T_74d27_row2_col5" class="data row2 col5" >—</td>
+      <td id="T_74d27_row2_col6" class="data row2 col6" >—</td>
+      <td id="T_74d27_row2_col7" class="data row2 col7" >—</td>
+      <td id="T_74d27_row2_col8" class="data row2 col8" >+3.81%</td>
+      <td id="T_74d27_row2_col9" class="data row2 col9" >8.16K</td>
+      <td id="T_74d27_row2_col10" class="data row2 col10" >+299</td>
+      <td id="T_74d27_row2_col11" class="data row2 col11" >10.01K</td>
+      <td id="T_74d27_row2_col12" class="data row2 col12" >10.42K</td>
+      <td id="T_74d27_row2_col13" class="data row2 col13" >+407</td>
+    </tr>
+  </tbody>
+</table>
+</details>
+<details class="drill"><summary><a href="https://app.stashaway.sg/goal/69b99506eb2f9823f9d1225a" target="_blank" rel="noopener" class="port-link">Income Investing</a> · SGD 5.02K → <span class="pos">5.03K</span> (<span class="pos">+17 SGD, +0.35%</span>) · 6 holdings</summary><style type="text/css">
+#T_daa57 tbody tr:nth-child(7) td {
+  font-weight: 600;
+  border-top: 2px solid #30363d;
+}
+#T_daa57_row0_col8, #T_daa57_row0_col10, #T_daa57_row1_col8, #T_daa57_row1_col10, #T_daa57_row2_col8, #T_daa57_row2_col10, #T_daa57_row4_col8, #T_daa57_row4_col10, #T_daa57_row6_col8, #T_daa57_row6_col10 {
+  background-color: rgba(63, 185, 80, 0.18);
+  color: #3fb950;
+}
+</style>
+<table id="T_daa57" class="ds-table ds-holdings">
+  <thead>
+    <tr>
+      <th id="T_daa57_level0_col0" class="col_heading level0 col0" >Ticker</th>
+      <th id="T_daa57_level0_col1" class="col_heading level0 col1" >Asset · Region</th>
+      <th id="T_daa57_level0_col2" class="col_heading level0 col2" >Weight</th>
+      <th id="T_daa57_level0_col3" class="col_heading level0 col3" >Stmt value (SGD)</th>
+      <th id="T_daa57_level0_col4" class="col_heading level0 col4" >Stmt price (SGD)</th>
+      <th id="T_daa57_level0_col5" class="col_heading level0 col5" >Stmt date</th>
+      <th id="T_daa57_level0_col6" class="col_heading level0 col6" >Today price (SGD)</th>
+      <th id="T_daa57_level0_col7" class="col_heading level0 col7" >Today date</th>
+      <th id="T_daa57_level0_col8" class="col_heading level0 col8" >Δ%</th>
+      <th id="T_daa57_level0_col9" class="col_heading level0 col9" >Today value (SGD)</th>
+      <th id="T_daa57_level0_col10" class="col_heading level0 col10" >Δ value (SGD)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td id="T_daa57_row0_col0" class="data row0 col0" >0P0001I87K.SI</td>
+      <td id="T_daa57_row0_col1" class="data row0 col1" >Bond · Global</td>
+      <td id="T_daa57_row0_col2" class="data row0 col2" >28.71%</td>
+      <td id="T_daa57_row0_col3" class="data row0 col3" >1.44K</td>
+      <td id="T_daa57_row0_col4" class="data row0 col4" >10.9300</td>
+      <td id="T_daa57_row0_col5" class="data row0 col5" >2026-04-30</td>
+      <td id="T_daa57_row0_col6" class="data row0 col6" >10.9400</td>
+      <td id="T_daa57_row0_col7" class="data row0 col7" >2026-05-28</td>
+      <td id="T_daa57_row0_col8" class="data row0 col8" >+0.09%</td>
+      <td id="T_daa57_row0_col9" class="data row0 col9" >1.44K</td>
+      <td id="T_daa57_row0_col10" class="data row0 col10" >+1</td>
+    </tr>
+    <tr>
+      <td id="T_daa57_row1_col0" class="data row1 col0" >0P0001DWBA.SI</td>
+      <td id="T_daa57_row1_col1" class="data row1 col1" >Bond · Global</td>
+      <td id="T_daa57_row1_col2" class="data row1 col2" >28.71%</td>
+      <td id="T_daa57_row1_col3" class="data row1 col3" >1.44K</td>
+      <td id="T_daa57_row1_col4" class="data row1 col4" >11.8700</td>
+      <td id="T_daa57_row1_col5" class="data row1 col5" >2026-04-30</td>
+      <td id="T_daa57_row1_col6" class="data row1 col6" >11.9700</td>
+      <td id="T_daa57_row1_col7" class="data row1 col7" >2026-05-28</td>
+      <td id="T_daa57_row1_col8" class="data row1 col8" >+0.84%</td>
+      <td id="T_daa57_row1_col9" class="data row1 col9" >1.45K</td>
+      <td id="T_daa57_row1_col10" class="data row1 col10" >+12</td>
+    </tr>
+    <tr>
+      <td id="T_daa57_row2_col0" class="data row2 col0" >0P0001RG8N.SI</td>
+      <td id="T_daa57_row2_col1" class="data row2 col1" >Bond · Emerging Markets</td>
+      <td id="T_daa57_row2_col2" class="data row2 col2" >16.83%</td>
+      <td id="T_daa57_row2_col3" class="data row2 col3" >844</td>
+      <td id="T_daa57_row2_col4" class="data row2 col4" >12.2700</td>
+      <td id="T_daa57_row2_col5" class="data row2 col5" >2026-04-30</td>
+      <td id="T_daa57_row2_col6" class="data row2 col6" >12.3000</td>
+      <td id="T_daa57_row2_col7" class="data row2 col7" >2026-05-28</td>
+      <td id="T_daa57_row2_col8" class="data row2 col8" >+0.24%</td>
+      <td id="T_daa57_row2_col9" class="data row2 col9" >846</td>
+      <td id="T_daa57_row2_col10" class="data row2 col10" >+2</td>
+    </tr>
+    <tr>
+      <td id="T_daa57_row3_col0" class="data row3 col0" >0P0001SOG4.SI</td>
+      <td id="T_daa57_row3_col1" class="data row3 col1" >Bond · Global</td>
+      <td id="T_daa57_row3_col2" class="data row3 col2" >14.85%</td>
+      <td id="T_daa57_row3_col3" class="data row3 col3" >745</td>
+      <td id="T_daa57_row3_col4" class="data row3 col4" >11.2700</td>
+      <td id="T_daa57_row3_col5" class="data row3 col5" >2026-04-30</td>
+      <td id="T_daa57_row3_col6" class="data row3 col6" >11.2700</td>
+      <td id="T_daa57_row3_col7" class="data row3 col7" >2026-05-28</td>
+      <td id="T_daa57_row3_col8" class="data row3 col8" >+0.00%</td>
+      <td id="T_daa57_row3_col9" class="data row3 col9" >745</td>
+      <td id="T_daa57_row3_col10" class="data row3 col10" >0</td>
+    </tr>
+    <tr>
+      <td id="T_daa57_row4_col0" class="data row4 col0" >0P0001RG8Q.SI</td>
+      <td id="T_daa57_row4_col1" class="data row4 col1" >Bond · Global</td>
+      <td id="T_daa57_row4_col2" class="data row4 col2" >9.90%</td>
+      <td id="T_daa57_row4_col3" class="data row4 col3" >497</td>
+      <td id="T_daa57_row4_col4" class="data row4 col4" >11.0100</td>
+      <td id="T_daa57_row4_col5" class="data row4 col5" >2026-04-30</td>
+      <td id="T_daa57_row4_col6" class="data row4 col6" >11.0500</td>
+      <td id="T_daa57_row4_col7" class="data row4 col7" >2026-05-28</td>
+      <td id="T_daa57_row4_col8" class="data row4 col8" >+0.36%</td>
+      <td id="T_daa57_row4_col9" class="data row4 col9" >498</td>
+      <td id="T_daa57_row4_col10" class="data row4 col10" >+2</td>
+    </tr>
+    <tr>
+      <td id="T_daa57_row5_col0" class="data row5 col0" >CASH_SGD</td>
+      <td id="T_daa57_row5_col1" class="data row5 col1" >Cash · Singapore</td>
+      <td id="T_daa57_row5_col2" class="data row5 col2" >1.00%</td>
+      <td id="T_daa57_row5_col3" class="data row5 col3" >50</td>
+      <td id="T_daa57_row5_col4" class="data row5 col4" >—</td>
+      <td id="T_daa57_row5_col5" class="data row5 col5" >2026-04-30</td>
+      <td id="T_daa57_row5_col6" class="data row5 col6" >—</td>
+      <td id="T_daa57_row5_col7" class="data row5 col7" >2026-05-29</td>
+      <td id="T_daa57_row5_col8" class="data row5 col8" >+0.00%</td>
+      <td id="T_daa57_row5_col9" class="data row5 col9" >50</td>
+      <td id="T_daa57_row5_col10" class="data row5 col10" >0</td>
+    </tr>
+    <tr>
+      <td id="T_daa57_row6_col0" class="data row6 col0" >Total</td>
+      <td id="T_daa57_row6_col1" class="data row6 col1" ></td>
+      <td id="T_daa57_row6_col2" class="data row6 col2" >100.00%</td>
+      <td id="T_daa57_row6_col3" class="data row6 col3" >5.02K</td>
+      <td id="T_daa57_row6_col4" class="data row6 col4" >—</td>
+      <td id="T_daa57_row6_col5" class="data row6 col5" >—</td>
+      <td id="T_daa57_row6_col6" class="data row6 col6" >—</td>
+      <td id="T_daa57_row6_col7" class="data row6 col7" >—</td>
+      <td id="T_daa57_row6_col8" class="data row6 col8" >+0.35%</td>
+      <td id="T_daa57_row6_col9" class="data row6 col9" >5.03K</td>
+      <td id="T_daa57_row6_col10" class="data row6 col10" >+17</td>
+    </tr>
+  </tbody>
+</table>
+</details>
+<details class="drill"><summary><a href="https://app.stashaway.sg/goal/69b992b85f0a07fcc894efa4" target="_blank" rel="noopener" class="port-link">Utilities</a> · USD 3.91K → <span class="neg">3.71K</span> (<span class="neg">-203 USD / -247 SGD, -5.19%</span>) · 2 holdings</summary><style type="text/css">
+#T_d8adc tbody tr:nth-child(3) td {
+  font-weight: 600;
+  border-top: 2px solid #30363d;
+}
+#T_d8adc_row0_col8, #T_d8adc_row0_col10, #T_d8adc_row0_col13, #T_d8adc_row2_col8, #T_d8adc_row2_col10, #T_d8adc_row2_col13 {
+  background-color: rgba(248, 81, 73, 0.18);
+  color: #f85149;
+}
+#T_d8adc_row1_col13 {
+  background-color: rgba(63, 185, 80, 0.18);
+  color: #3fb950;
+}
+</style>
+<table id="T_d8adc" class="ds-table ds-holdings">
+  <thead>
+    <tr>
+      <th id="T_d8adc_level0_col0" class="col_heading level0 col0" >Ticker</th>
+      <th id="T_d8adc_level0_col1" class="col_heading level0 col1" >Asset · Region</th>
+      <th id="T_d8adc_level0_col2" class="col_heading level0 col2" >Weight</th>
+      <th id="T_d8adc_level0_col3" class="col_heading level0 col3" >Stmt value (USD)</th>
+      <th id="T_d8adc_level0_col4" class="col_heading level0 col4" >Stmt price (USD)</th>
+      <th id="T_d8adc_level0_col5" class="col_heading level0 col5" >Stmt date</th>
+      <th id="T_d8adc_level0_col6" class="col_heading level0 col6" >Today price (USD)</th>
+      <th id="T_d8adc_level0_col7" class="col_heading level0 col7" >Today date</th>
+      <th id="T_d8adc_level0_col8" class="col_heading level0 col8" >Δ%</th>
+      <th id="T_d8adc_level0_col9" class="col_heading level0 col9" >Today value (USD)</th>
+      <th id="T_d8adc_level0_col10" class="col_heading level0 col10" >Δ value (USD)</th>
+      <th id="T_d8adc_level0_col11" class="col_heading level0 col11" >Stmt value (SGD)</th>
+      <th id="T_d8adc_level0_col12" class="col_heading level0 col12" >Today value (SGD)</th>
+      <th id="T_d8adc_level0_col13" class="col_heading level0 col13" >Δ value (SGD)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td id="T_d8adc_row0_col0" class="data row0 col0" >XLU</td>
+      <td id="T_d8adc_row0_col1" class="data row0 col1" >Equity · US</td>
+      <td id="T_d8adc_row0_col2" class="data row0 col2" >100.00%</td>
+      <td id="T_d8adc_row0_col3" class="data row0 col3" >3.91K</td>
+      <td id="T_d8adc_row0_col4" class="data row0 col4" >46.8500</td>
+      <td id="T_d8adc_row0_col5" class="data row0 col5" >2026-04-30</td>
+      <td id="T_d8adc_row0_col6" class="data row0 col6" >44.4200</td>
+      <td id="T_d8adc_row0_col7" class="data row0 col7" >2026-05-29</td>
+      <td id="T_d8adc_row0_col8" class="data row0 col8" >-5.19%</td>
+      <td id="T_d8adc_row0_col9" class="data row0 col9" >3.71K</td>
+      <td id="T_d8adc_row0_col10" class="data row0 col10" >-203</td>
+      <td id="T_d8adc_row0_col11" class="data row0 col11" >4.98K</td>
+      <td id="T_d8adc_row0_col12" class="data row0 col12" >4.74K</td>
+      <td id="T_d8adc_row0_col13" class="data row0 col13" >-247</td>
+    </tr>
+    <tr>
+      <td id="T_d8adc_row1_col0" class="data row1 col0" >CASH_USD</td>
+      <td id="T_d8adc_row1_col1" class="data row1 col1" >Cash · US</td>
+      <td id="T_d8adc_row1_col2" class="data row1 col2" >0.00%</td>
+      <td id="T_d8adc_row1_col3" class="data row1 col3" >0</td>
+      <td id="T_d8adc_row1_col4" class="data row1 col4" >—</td>
+      <td id="T_d8adc_row1_col5" class="data row1 col5" >2026-04-30</td>
+      <td id="T_d8adc_row1_col6" class="data row1 col6" >—</td>
+      <td id="T_d8adc_row1_col7" class="data row1 col7" >2026-05-29</td>
+      <td id="T_d8adc_row1_col8" class="data row1 col8" >+0.00%</td>
+      <td id="T_d8adc_row1_col9" class="data row1 col9" >0</td>
+      <td id="T_d8adc_row1_col10" class="data row1 col10" >0</td>
+      <td id="T_d8adc_row1_col11" class="data row1 col11" >0</td>
+      <td id="T_d8adc_row1_col12" class="data row1 col12" >0</td>
+      <td id="T_d8adc_row1_col13" class="data row1 col13" >+0</td>
+    </tr>
+    <tr>
+      <td id="T_d8adc_row2_col0" class="data row2 col0" >Total</td>
+      <td id="T_d8adc_row2_col1" class="data row2 col1" ></td>
+      <td id="T_d8adc_row2_col2" class="data row2 col2" >100.00%</td>
+      <td id="T_d8adc_row2_col3" class="data row2 col3" >3.91K</td>
+      <td id="T_d8adc_row2_col4" class="data row2 col4" >—</td>
+      <td id="T_d8adc_row2_col5" class="data row2 col5" >—</td>
+      <td id="T_d8adc_row2_col6" class="data row2 col6" >—</td>
+      <td id="T_d8adc_row2_col7" class="data row2 col7" >—</td>
+      <td id="T_d8adc_row2_col8" class="data row2 col8" >-5.19%</td>
+      <td id="T_d8adc_row2_col9" class="data row2 col9" >3.71K</td>
+      <td id="T_d8adc_row2_col10" class="data row2 col10" >-203</td>
+      <td id="T_d8adc_row2_col11" class="data row2 col11" >4.98K</td>
+      <td id="T_d8adc_row2_col12" class="data row2 col12" >4.74K</td>
+      <td id="T_d8adc_row2_col13" class="data row2 col13" >-247</td>
+    </tr>
+  </tbody>
+</table>
+</details>
+
+<h2>Deposits log (post-stmt)</h2>
+<p class="footnote">Rows from <code>holding links.xlsx</code> &gt; Deposits sheet, filtered to
+dates after the statement. Anything on/before 2026-04-30 is already in the statement's
+<code>total_value</code> and not counted again.</p>
+<table class="ds-table deposits-log"><thead><tr><th>Date</th><th>Portfolio</th><th>Ccy</th><th>Amount</th><th>Notes</th></tr></thead><tbody><tr><td>2026-05-01</td><td>General Investing</td><td>SGD</td><td>+2,100.00</td><td>Daily auto-transfer 100/d × 21 wkdays (running)</td></tr><tr><td>2026-05-01</td><td>Crypto</td><td>SGD</td><td>+1,050.00</td><td>Daily auto-transfer 50/d × 21 wkdays (running)</td></tr><tr><td>2026-05-01</td><td>Simple SGD</td><td>SGD</td><td>-3,150.00</td><td>Source of daily auto-transfers (out)</td></tr><tr><td>2026-05-18</td><td>Simple SGD</td><td>SGD</td><td>+3,000.00</td><td>Top-up</td></tr><tr><td>2026-05-21</td><td>Investment-Grade SGD</td><td>SGD</td><td>+10,000.00</td><td>New sleeve seed</td></tr><tr><td>2026-05-21</td><td>Global Floating Rate USD</td><td>SGD</td><td>+10,000.00</td><td>New sleeve seed</td></tr><tr><td>2026-05-21</td><td>Asia ex-Japan</td><td>SGD</td><td>+10,000.00</td><td>New sleeve seed</td></tr><tr><td>2026-05-21</td><td>Japan Currency-hedged</td><td>SGD</td><td>+10,000.00</td><td>New sleeve seed</td></tr><tr><td>2026-05-25</td><td>SG ETF</td><td>SGD</td><td>+10,000.00</td><td>Top-up</td></tr><tr><td>2026-05-26</td><td>Longevity Stack</td><td>SGD</td><td>+10,000.00</td><td>New sleeve seed</td></tr><tr><td>2026-05-26</td><td>The AI Power Stack</td><td>SGD</td><td>+10,000.00</td><td>New sleeve seed</td></tr><tr><td>2026-05-28</td><td>Simple SGD</td><td>SGD</td><td>+3,000.00</td><td>Top-up</td></tr></tbody></table>
+
+<h2>Methodology</h2>
+<div class="footnote">
+<p><strong>Architecture (signed off 2026-05-31):</strong> reconcile.html answers ONE
+question — "does our model match the app?". App values (start AND end) come
+from the user-maintained <code>Portfolio SGD Values</code> sheet in
+<code>holding links.xlsx</code>; our model is the validation column.</p>
+<ul>
+  <li><strong>App (start) / App (end)</strong>: both sourced from the
+      <code>Portfolio SGD Values</code> sheet — start = snapshot closest to
+      the statement date; end = snapshot closest to today. These are the
+      "what really happened" numbers, untouched by our reconstruction.</li>
+  <li><strong>Δ Perf</strong>: <code>app_end - app_start - deposits</code>.
+      Pure deposit-adjusted performance per sleeve, in SGD.</li>
+  <li><strong>Weight source: target % (piecewise)</strong> — uses the target
+      snapshot effective at each sub-period within (stmt_date, end_date]. When
+      you change a target mid-period (e.g. removed Crypto from GI on May 26),
+      the period is sliced and each sub-period uses its own targets, with
+      cumulative compounding across segments. Falls back to stmt-date actual
+      weights for segments where target coverage is incomplete.</li>
+  <li><strong>Value movement: buy-and-hold per holding</strong> within each
+      sub-period — <code>seg_return = Σ_h w_seg[h] × (p_end / p_start)</code>.
+      The portfolio cum return is the product across segments.</li>
+  <li><strong>FX</strong> pinned to your PDF stmt's rate at start (so stmt SGD
+      matches the app exactly); mark-to-market Yahoo daily USDSGD for every
+      other date.</li>
+  <li><strong>Cash / MMF forward-accrual</strong>: where Yahoo NAV for a
+      low-vol holding (Cash, Money Market, Treasury 0-3M) lags by 1-2 days,
+      we project missing days at the holding's own realised yield. Marked in
+      drill-down with <code>*</code> and <code>(+Nd)</code>.</li>
+  <li><strong>Synthetic cash dropped (M5, 2026-05-31)</strong>:
+      <code>CASH_USD</code> / <code>CASH_SGD</code> placeholders now return
+      zero. Real cash positions use real Yahoo tickers (LionGlobal SGD MMF +
+      Enhanced Liquidity, OCBC SGD MMF, BB3M.L) that flow through the
+      buy-and-hold path with forward-accrual.</li>
+  <li><strong>Deposits</strong> summed from <code>holding links.xlsx</code>'s
+      Deposits sheet (rows with date &gt; stmt date). Subtracted from Δ Perf
+      and added into our-model+deposits for the gap calculation.</li>
+  <li><strong>Drill-down vs sleeve total</strong>: per-holding values in the
+      drill-down use simple point-to-point (stmt → today) ratios. The sleeve
+      Total there sums those — for sleeves that DID change targets mid-period
+      this may differ from "Our Model" in the table above by the rebalancing
+      effect. Treat the table's "Our Model" as the authoritative piecewise
+      number; the drill-down is the per-holding break-out.</li>
+  <li><strong>Status badges</strong>: exact (&lt;0.05%), ok (&lt;0.3%),
+      noise (&lt;1%), ⚠ investigate (≥1%).</li>
+</ul>
+</div>
+
+<script>
+(function () {
+  function tableToTsv(table) {
+    var lines = [];
+    var headerRows = table.querySelectorAll("thead tr");
+    var headerRow = headerRows[headerRows.length - 1];
+    if (headerRow) {
+      lines.push(Array.prototype.map.call(headerRow.cells, function (c) {
+        return c.textContent.trim();
+      }).join("\t"));
+    }
+    var tbody = table.querySelector("tbody");
+    if (tbody) {
+      Array.prototype.forEach.call(tbody.rows, function (r) {
+        lines.push(Array.prototype.map.call(r.cells, function (c) {
+          return c.textContent.trim();
+        }).join("\t"));
+      });
+    }
+    var foot = table.querySelector("tfoot");
+    if (foot) {
+      Array.prototype.forEach.call(foot.rows, function (r) {
+        lines.push(Array.prototype.map.call(r.cells, function (c) {
+          return c.textContent.trim();
+        }).join("\t"));
+      });
+    }
+    return lines.join("\n");
+  }
+  function attach(table) {
+    if (table.dataset.copyAttached) return;
+    table.dataset.copyAttached = "1";
+    var wrap = document.createElement("div");
+    wrap.className = "copy-wrap";
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "copy-btn";
+    btn.textContent = "📋 Copy table";
+    btn.addEventListener("click", function () {
+      var tsv = tableToTsv(table);
+      var done = function () {
+        btn.textContent = "✓ Copied";
+        btn.classList.add("copied");
+        setTimeout(function () {
+          btn.textContent = "📋 Copy table";
+          btn.classList.remove("copied");
+        }, 1400);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(tsv).then(done);
+      } else {
+        var ta = document.createElement("textarea");
+        ta.value = tsv;
+        document.body.appendChild(ta); ta.select();
+        try { document.execCommand("copy"); done(); }
+        finally { document.body.removeChild(ta); }
+      }
+    });
+    wrap.appendChild(btn);
+    table.parentNode.insertBefore(wrap, table);
+  }
+  document.addEventListener("DOMContentLoaded", function () {
+    document.querySelectorAll("table.ds-table").forEach(attach);
+  });
+})();
+</script>
+</body></html>

@@ -16,12 +16,21 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class AssetMetadata:
-    """Static metadata for a Stashaway-tradeable asset."""
+    """Static metadata for a Stashaway-tradeable asset.
+
+    ``data_source`` indicates how truthful the mapped ticker is:
+    - ``"real"`` — same fund Stashaway holds (identical NAV)
+    - ``"proxy"`` — different fund, structurally similar (composition or
+      blend approximation; expect modest drift)
+    - ``"synthetic"`` — no real ticker, return series generated locally
+      (CASH_USD/CASH_SGD with a published yield)
+    """
 
     ticker: str
     asset_class: str
     region: str
     sector: str | None = None
+    data_source: str = "real"  # "real" | "proxy" | "synthetic"
 
 
 class UnknownAssetError(KeyError):
@@ -36,14 +45,27 @@ class UnknownAssetError(KeyError):
         super().__init__(msg)
 
 
-def _m(ticker: str, asset_class: str, region: str, sector: str | None = None) -> AssetMetadata:
-    return AssetMetadata(ticker=ticker, asset_class=asset_class, region=region, sector=sector)
+def _m(
+    ticker: str,
+    asset_class: str,
+    region: str,
+    sector: str | None = None,
+    *,
+    data_source: str = "real",
+) -> AssetMetadata:
+    return AssetMetadata(
+        ticker=ticker,
+        asset_class=asset_class,
+        region=region,
+        sector=sector,
+        data_source=data_source,
+    )
 
 
 STASHAWAY_UNIVERSE: dict[str, AssetMetadata] = {
     # ----------------------------------------------------------------- Synthetic cash
-    "CASH_USD": _m("CASH_USD", "Cash", "US", "Cash"),
-    "CASH_SGD": _m("CASH_SGD", "Cash", "Singapore", "Cash"),
+    "CASH_USD": _m("CASH_USD", "Cash", "US", "Cash", data_source="synthetic"),
+    "CASH_SGD": _m("CASH_SGD", "Cash", "Singapore", "Cash", data_source="synthetic"),
     # ----------------------------------------------------------------- US-listed equity sector SPDRs
     "XLE": _m("XLE", "Equity", "US", "Energy"),
     "XLI": _m("XLI", "Equity", "US", "Industrials"),
@@ -62,18 +84,34 @@ STASHAWAY_UNIVERSE: dict[str, AssetMetadata] = {
     "BBJP": _m("BBJP", "Equity", "Japan", "Broad Market"),
     "DXJ": _m("DXJ", "Equity", "Japan", "Hedged"),
     "FLIN": _m("FLIN", "Equity", "India", "Broad Market"),
+    "AAXJ": _m("AAXJ", "Equity", "Asia ex-Japan", "Broad Market"),
+    # ----------------------------------------------------------------- Thematic / sector ETFs (custom stacks)
+    # ARK Genomic Revolution ETF — Cathie Wood genomics/biotech, used in
+    # user's Longevity Stack (25% alongside XLV 74% + cash 1%).
+    "ARKG": _m("ARKG", "Equity", "US", "Genomics/Biotech"),
+    # VanEck Semiconductors ETF — used in user's AI Power Stack (64%).
+    "SMH": _m("SMH", "Equity", "US", "Semiconductors"),
+    # First Trust NASDAQ Clean Edge Smart Grid Infrastructure Index ETF —
+    # used in user's AI Power Stack (35%).
+    "GRID": _m("GRID", "Equity", "US", "Smart Grid Infrastructure"),
     # ----------------------------------------------------------------- US-listed bonds & cash-equivalent
     "BB3M": _m("BB3M", "Bond", "US", "Treasury 0-3M"),
+    # iShares Floating Rate Bond ETF — used in the user's Global Floating
+    # Rate USD sleeve (USD short-duration corp bond, resets quarterly).
+    "FLOT": _m("FLOT", "Bond", "US", "Floating Rate"),
     # ----------------------------------------------------------------- US-listed thematic / income
     # Stashaway uses the UCITS variant for SG investors (15% withholding via
     # Ireland-US treaty vs 30% on the US-listed JEPQ). User confirmed 2026-05.
     "JEPQ": _m("JEPQ.L", "Equity", "US", "Nasdaq Covered Call (proxy: JEPQ.L UCITS)"),
     # ----------------------------------------------------------------- US-listed alts
     "GLDM": _m("GLDM", "Commodity", "Global", "Gold"),
-    # Spot crypto prices (BTC-USD / ETH-USD) used as proxies — far longer history
-    # than the 2024-launched FBTC / FETH spot-bitcoin/ether ETFs.
-    "FBTC": _m("BTC-USD", "Crypto", "Global", "Bitcoin (proxy: BTC-USD spot)"),
-    "FETH": _m("ETH-USD", "Crypto", "Global", "Ethereum (proxy: ETH-USD spot)"),
+    # Real Fidelity spot-crypto ETFs Stashaway actually holds. Earlier we used
+    # BTC-USD/ETH-USD spot for longer history (FBTC launched 2024-01, FETH
+    # 2024-07), but Stashaway buys the ETF wrapper — using the real tickers
+    # gives ~0.17pp accuracy on the SRS/Crypto reconciliation. Switch back to
+    # spot for any pre-launch historical analytics (task #98).
+    "FBTC": _m("FBTC", "Crypto", "Global", "Bitcoin"),
+    "FETH": _m("FETH", "Crypto", "Global", "Ethereum"),
     # ----------------------------------------------------------------- LSE-listed UCITS ETFs (BlackRock sleeve)
     "ISAC": _m("ISAC.L", "Equity", "Global", "Broad Market"),
     "CSUS": _m("CSUS.L", "Equity", "US", "Broad Market"),
@@ -151,6 +189,7 @@ STASHAWAY_UNIVERSE: dict[str, AssetMetadata] = {
     # funds annualised ~identically (~2.33% / ~1.89% over 5y) so metric impact
     # is negligible vs the prior collapsed mapping.
     "LNWELIA": _m("0P0001DB5Z.SI", "Cash", "Singapore", "LionGlobal SGD Enhanced Liquidity A"),
+    # OCBSGDM (the 30% MMF leg) is wired to the real LionGlobal SGD MMF.
     "OCBSGDM": _m("0P00006FZD.SI", "Cash", "Singapore", "LionGlobal SGD Money Market A"),
 }
 """Stashaway identifier → AssetMetadata.

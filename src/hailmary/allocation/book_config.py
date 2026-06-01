@@ -10,9 +10,10 @@ from hailmary.allocation.portfolios import Role
 
 ROLES: dict[str, set[Role]] = {
     # Stashaway Simple cash family — visible to diagnostic as replacement candidates.
-    # Underlying yield modelled via synthetic CASH_USD / CASH_SGD return series
-    # (see returns.py _CASH_ANNUAL_YIELDS). Simple SGD + Guitsa share the same
-    # composition; kept separate for statement audit (Guitsa = mum's label).
+    # Real LionGlobal SGD MMF / Enhanced Liquidity tickers cover most of the
+    # yield; the residual CASH_USD / CASH_SGD placeholders return zero (M5
+    # dropped 2026-05-31). Simple SGD + Guitsa share composition; kept
+    # separate for statement audit (Guitsa = mum's label).
     "Simple USD": {Role.HOLDING, Role.PROTECTED},
     "Simple SGD": {Role.HOLDING, Role.PROTECTED},
     "Guitsa": {Role.HOLDING, Role.PROTECTED},

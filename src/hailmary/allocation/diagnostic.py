@@ -329,6 +329,211 @@ def combined_exposure_figure(exposure: dict[str, pd.DataFrame]) -> go.Figure:
 # ---------------------------------------------------------------------------
 
 
+def _build_holding_nav_panel_sgd(
+    portfolios: Sequence[Portfolio],
+    *,
+    start: date | datetime | None,
+    end: date | datetime | None,
+    price_source: Any | None,
+    fx_series_usd_sgd: pd.Series | None,
+    target_weights_by_portfolio: dict[str, dict[str, float]]
+    | dict[str, list[tuple[date, dict[str, float]]]]
+    | None = None,
+) -> pd.DataFrame:
+    """Per-portfolio SGD NAV daily panel — piecewise across target boundaries.
+
+    For each HOLDING-tagged portfolio:
+    1. Slice (stmt_date, end_date] at every target-change date.
+    2. For each segment: ``nav(d) = nav(seg_start) × Σ_h w_seg[h] × (price_h(d) /
+       price_h(seg_start))`` for d ∈ [seg_start, seg_end].
+    3. Chain segments: NAV is continuous at boundaries by construction.
+    4. USD portfolios are mark-to-market FX-converted day by day, pinned to
+       the PDF statement FX on stmt_date so the start of the NAV ties exactly
+       to the reconciliation table's stmt SGD value.
+    5. Stale prices for cash-like holdings (asset_class=Cash or sector
+       containing "money market" / "treasury 0-3m") are forward-accrued at the
+       holding's own realised yield. ``CASH_USD/CASH_SGD`` placeholders
+       contribute zero return (M5 dropped 2026-05-31).
+
+    Returns a DataFrame indexed by calendar date with one column per portfolio,
+    values in SGD. ``book_nav_sgd = panel.sum(axis=1)`` is the whole-book NAV.
+    Dates before a portfolio's stmt_date are NaN — book_performance uses
+    ``dropna(how="any")`` so the book NAV starts at the latest stmt_date.
+    """
+    holdings_books = [p for p in portfolios if Role.HOLDING in p.roles]
+    if not holdings_books:
+        return pd.DataFrame()
+
+    start_date = (
+        start.date() if isinstance(start, datetime)
+        else (start if start else min(p.statement_date for p in holdings_books))
+    )
+    end_date = end.date() if isinstance(end, datetime) else (end or date.today())
+
+    symbols = sorted({
+        h.metadata.ticker
+        for p in holdings_books
+        for h in p.holdings
+        if not h.metadata.ticker.startswith("CASH_")
+    })
+    bars: pd.DataFrame | None = None
+    if symbols and price_source is not None:
+        try:
+            fetch_start = min(start_date, min(p.statement_date for p in holdings_books))
+            fetch_start -= timedelta(days=7)
+            bars = price_source.get_bars(symbols, fetch_start, end_date)
+        except Exception as exc:  # pragma: no cover
+            warnings.warn(f"Could not fetch price bars: {exc}", stacklevel=2)
+
+    calendar = pd.date_range(start_date, end_date, freq="D")
+
+    fx_aligned: pd.Series | None = None
+    if fx_series_usd_sgd is not None and not fx_series_usd_sgd.empty:
+        fx_clean = fx_series_usd_sgd.copy()
+        if hasattr(fx_clean.index, "tz") and fx_clean.index.tz is not None:
+            fx_clean.index = fx_clean.index.tz_localize(None)
+        fx_aligned = fx_clean.reindex(calendar).ffill().bfill()
+
+    raw_prices: dict[str, pd.Series] = {}
+    ffilled_prices: dict[str, pd.Series] = {}
+    if bars is not None:
+        for t in symbols:
+            if t not in bars.index.get_level_values(0):
+                continue
+            ser = bars.xs(t, level=0)["close"].copy()
+            if hasattr(ser.index, "tz") and ser.index.tz is not None:
+                ser.index = ser.index.tz_localize(None)
+            raw_prices[t] = ser
+            ffilled_prices[t] = ser.reindex(calendar).ffill()
+
+    def _close_at(t: str, target: date) -> tuple[float | None, date | None]:
+        """Return (close, last-raw-data-date ≤ target) for forward-fill semantics."""
+        ser_raw = raw_prices.get(t)
+        if ser_raw is None or ser_raw.empty:
+            return None, None
+        ts = pd.Timestamp(target)
+        sub = ser_raw[ser_raw.index <= ts]
+        if sub.empty:
+            return None, None
+        last_idx = sub.index[-1]
+        actual = last_idx.date() if hasattr(last_idx, "date") else last_idx
+        return float(sub.iloc[-1]), actual
+
+    def _is_cash_like(asset_class: str | None, sector: str | None) -> bool:
+        ac = (asset_class or "").lower()
+        sec = (sector or "").lower()
+        return ac == "cash" or "money market" in sec or "treasury 0-3m" in sec
+
+    def _segment_daily_factor(
+        weights: dict[str, float],
+        holdings_by_sid: dict[str, Any],
+        seg_start: date,
+        seg_dates: pd.DatetimeIndex,
+    ) -> pd.Series:
+        """Daily ratio Σ_h w[h] × price_h(d)/price_h(seg_start) for d in seg_dates."""
+        factor = pd.Series(0.0, index=seg_dates, dtype=float)
+        for sid, w in weights.items():
+            if w == 0:
+                continue
+            h = holdings_by_sid.get(sid)
+            if h is None:
+                factor += w * 1.0
+                continue
+            t = h.metadata.ticker
+            if t.startswith("CASH_"):
+                factor += w * 1.0  # M5 dropped — zero return
+                continue
+            p0, d0 = _close_at(t, seg_start)
+            if p0 is None or p0 <= 0:
+                factor += w * 1.0
+                continue
+            daily = ffilled_prices.get(t)
+            if daily is None:
+                factor += w * 1.0
+                continue
+            daily_seg = daily.reindex(seg_dates).ffill().bfill()
+            # Forward-accrue stale low-vol prices: when the raw data ends
+            # before the segment's last date for a cash-like holding, project
+            # the missing tail at the holding's own realised yield from
+            # (seg_start → last_data_date).
+            if _is_cash_like(h.metadata.asset_class, h.metadata.sector):
+                raw = raw_prices.get(t)
+                if raw is not None and not raw.empty:
+                    last_data_ts = raw.index[-1]
+                    seg_end_ts = seg_dates[-1]
+                    if last_data_ts < seg_end_ts and d0 is not None:
+                        in_data_days = max((last_data_ts.date() - d0).days, 1)
+                        p_last = float(raw.iloc[-1])
+                        if p_last > 0:
+                            ann_yield = (p_last / p0) ** (365.0 / in_data_days) - 1.0
+                            gap_days = (seg_dates - last_data_ts).days
+                            accrual_arr = np.where(
+                                gap_days > 0,
+                                (1.0 + ann_yield) ** (gap_days / 365.0),
+                                1.0,
+                            )
+                            daily_seg = daily_seg * pd.Series(accrual_arr, index=seg_dates)
+            factor += w * (daily_seg / p0)
+        return factor
+
+    out_cols: list[pd.Series] = []
+    for p in holdings_books:
+        stmt_fx = p.metadata.get("statement_fx_usd_sgd")
+        stmt_fx_value = float(stmt_fx) if stmt_fx is not None else None
+        is_usd = p.currency.upper() == "USD"
+        target_series = _resolve_target_series(
+            target_weights_by_portfolio.get(p.name) if target_weights_by_portfolio else None
+        )
+        holdings_by_sid = {h.stashaway_id: h for h in p.holdings}
+        stmt_weights = {h.stashaway_id: h.weight for h in p.holdings}
+        segments = _piecewise_segments(
+            p.statement_date, end_date, target_series, stmt_weights
+        )
+
+        nav_native = pd.Series(np.nan, index=calendar, dtype=float)
+        cum_value = float(p.total_value)
+        for seg_start, seg_end, weights, _basis in segments:
+            seg_start_ts = pd.Timestamp(seg_start)
+            seg_end_ts = pd.Timestamp(seg_end)
+            seg_mask = (calendar >= seg_start_ts) & (calendar <= seg_end_ts)
+            seg_dates = calendar[seg_mask]
+            if len(seg_dates) == 0:
+                continue
+            seg_factor = _segment_daily_factor(
+                weights, holdings_by_sid, seg_start, seg_dates
+            )
+            seg_nav = cum_value * seg_factor
+            nav_native.loc[seg_dates] = seg_nav.values
+            # Update cum_value to NAV at the segment's last calendar day so
+            # the next segment compounds off the real end-of-period value
+            cum_value = float(seg_nav.iloc[-1])
+
+        fee_annual = float(p.metadata.get("management_fee_annual", 0.0))
+        if fee_annual > 0:
+            stmt_ts = pd.Timestamp(p.statement_date)
+            days_since = (calendar - stmt_ts).days.to_numpy()
+            fee_factor = np.where(
+                days_since >= 0, 1.0 - fee_annual * days_since / 365.0, 1.0
+            )
+            nav_native = nav_native * pd.Series(fee_factor, index=calendar)
+
+        if is_usd and fx_aligned is not None and stmt_fx_value is not None:
+            fx_pinned = fx_aligned.copy()
+            stmt_ts = pd.Timestamp(p.statement_date)
+            if stmt_ts in fx_pinned.index:
+                fx_pinned.loc[stmt_ts] = stmt_fx_value
+            nav_sgd = nav_native * fx_pinned
+        else:
+            nav_sgd = nav_native
+
+        nav_sgd.name = p.name
+        out_cols.append(nav_sgd)
+
+    if not out_cols:
+        return pd.DataFrame()
+    return pd.concat(out_cols, axis=1)
+
+
 def book_performance(
     portfolios: Sequence[Portfolio],
     *,
@@ -340,6 +545,7 @@ def book_performance(
     fx_rate_usd_sgd: float | None = None,
     fx_series_usd_sgd: pd.Series | None = None,
     align_window: bool = True,
+    target_weights_by_portfolio: dict[str, dict[str, float]] | None = None,
 ) -> dict[str, Any]:
     """Whole-book metrics + NAV series (current-snapshot reconstruction).
 
@@ -399,16 +605,62 @@ def book_performance(
             "n_days": 0,
         }
 
-    panel = _build_returns_panel(
+    aum = sum(_to_sgd(p.total_value, p.currency) for p in holdings_books)
+
+    # When the caller passes a pre-fetched wide returns frame (no live
+    # price_source), fall back to the legacy daily-rebalanced compounding
+    # path — used by scenario tests and any in-memory-returns workflow. The
+    # new NAV-based path requires a `price_source` because it needs per-day
+    # price levels, not pre-computed returns.
+    if price_source is None and returns is not None:
+        return _book_performance_via_returns(
+            holdings_books,
+            aum=aum,
+            fx_rate_usd_sgd=fx_rate_usd_sgd,
+            start=start,
+            end=end,
+            returns=returns,
+            fx_series_usd_sgd=fx_series_usd_sgd,
+            risk_free_rate=risk_free_rate,
+            align_window=align_window,
+            to_sgd=_to_sgd,
+        )
+
+    # NAV-based path: sum per-holding SGD NAV trajectories so cum_return ties
+    # exactly to buy-and-hold reconciliation (sum of per-holding deltas).
+    nav_panel = _build_holding_nav_panel_sgd(
         holdings_books,
-        price_source=price_source,
-        returns=returns,
         start=start,
         end=end,
+        price_source=price_source,
         fx_series_usd_sgd=fx_series_usd_sgd,
+        target_weights_by_portfolio=target_weights_by_portfolio,
     )
-    aum = sum(_to_sgd(p.total_value, p.currency) for p in holdings_books)
-    if panel.empty:
+    if nav_panel.empty:
+        return {
+            "aum": aum,
+            "currency": "SGD",
+            "fx_rate_usd_sgd": fx_rate_usd_sgd,
+            "ann_return": 0.0,
+            "ann_vol": 0.0,
+            "sharpe": 0.0,
+            "max_dd": 0.0,
+            "nav": pd.Series(dtype=float),
+            "n_days": 0,
+            "windowed": pd.DataFrame(
+                columns=["period", "cum_return", "ann_return", "ann_vol",
+                         "sharpe", "max_dd", "days"]
+            ),
+        }
+
+    # Book NAV in SGD per calendar day. We require every holding to have
+    # data on the day — otherwise the missing holdings "blink on" later and
+    # cause the book NAV to jump (e.g. when JPM funds launched 2024-04 and
+    # FBTC launched 2024-01 didn't exist in 2022). This shortens history but
+    # gives clean, apples-to-apples buy-and-hold NAV throughout.
+    full_panel = nav_panel.dropna(how="any")
+    book_nav_sgd = full_panel.sum(axis=1) if not full_panel.empty else pd.Series(dtype=float)
+    if book_nav_sgd.empty:
         return {
             "aum": aum,
             "currency": "SGD",
@@ -421,34 +673,9 @@ def book_performance(
             "n_days": 0,
         }
 
-    weights = pd.Series({
-        p.name: _to_sgd(p.total_value, p.currency)
-        for p in holdings_books
-        if p.name in panel.columns
-    })
-    weights = weights / weights.sum()
-    panel = panel[weights.index]
-
-    if align_window:
-        # Apples-to-apples: align every column to the common window so weights
-        # are static (no per-day renormalisation, no "early book ≠ late book"
-        # mixing). Shorter history, cleaner numbers.
-        common_start = max(panel[c].dropna().index.min() for c in panel.columns)
-        aligned_panel = panel.loc[common_start:].dropna(how="any")
-        if aligned_panel.empty:
-            book_return = pd.Series(dtype=float)
-        else:
-            book_return = (aligned_panel * weights).sum(axis=1)
-    else:
-        # Full history with dynamic per-timestep weight renormalisation —
-        # early dates use only the older portfolios at boosted weights.
-        # Longer history but the early "book" isn't the same as today's book.
-        available = panel.notna().astype(float)
-        eff_weights = available.mul(weights, axis=1)
-        row_sums = eff_weights.sum(axis=1).replace(0.0, np.nan)
-        eff_weights = eff_weights.div(row_sums, axis=0)
-        book_return = (panel.fillna(0.0) * eff_weights).sum(axis=1).dropna()
-
+    # Daily book return for Sharpe/vol/DD — from the NAV's pct_change so
+    # returns reflect actual buy-and-hold weight drift (not daily-rebalanced).
+    book_return = book_nav_sgd.pct_change().dropna()
     if book_return.empty:
         return {
             "aum": aum,
@@ -462,12 +689,142 @@ def book_performance(
             "n_days": 0,
         }
 
+    # The buy-and-hold NAV path requires ALL holdings to have data on each
+    # day (dropna how="any"), which constrains "All" history to the launch
+    # date of the youngest holding (e.g. JPM SGD-Hdg funds 2024-04-04).
+    # For the long-history chart + annualised Sharpe/vol/DD, fall back to the
+    # legacy daily-rebalanced path on the per-portfolio return panel — it
+    # gracefully handles per-portfolio history mismatches via dynamic
+    # weight renormalisation. The new NAV path drives only the WINDOWED
+    # table (where cum_return ties exactly to reconciliation).
+    long_path = _book_performance_via_returns(
+        holdings_books,
+        aum=aum,
+        fx_rate_usd_sgd=fx_rate_usd_sgd,
+        start=start,
+        end=end,
+        returns=returns,
+        price_source=price_source,
+        fx_series_usd_sgd=fx_series_usd_sgd,
+        risk_free_rate=risk_free_rate,
+        align_window=align_window,
+        to_sgd=_to_sgd,
+    )
+
+    # Windowed table — combine the best of both NAVs:
+    #   - "Since stmt" row uses the new buy-and-hold NAV (ties to reconciliation)
+    #   - 1M/3M/6M/1Y/All + per-year use the long-history daily-rebalanced NAV
+    long_nav = long_path.get("nav", pd.Series(dtype=float))
+    if not long_nav.empty:
+        # `long_path["nav"]` is indexed to 100; rescale back to absolute SGD
+        # so the cum_return math works cleanly (NAV/NAV.iloc[0] - 1).
+        long_nav_abs = long_nav / long_nav.iloc[0] * float(aum)
+    else:
+        long_nav_abs = long_nav
+    windowed_long = _windowed_metrics_from_nav(
+        long_nav_abs, risk_free_rate=risk_free_rate, statement_date=None
+    )
+    windowed_stmt = _windowed_metrics_from_nav(
+        book_nav_sgd,
+        risk_free_rate=risk_free_rate,
+        statement_date=max(
+            (p.statement_date for p in holdings_books), default=None
+        ),
+    )
+    # Keep only the "Since stmt (...)" row from windowed_stmt; everything
+    # else comes from the long-history NAV.
+    since_row = windowed_stmt[
+        windowed_stmt["period"].str.startswith("Since stmt", na=False)
+    ]
+    windowed = pd.concat([since_row, windowed_long], ignore_index=True)
+
+    return {
+        "aum": float(aum),
+        "currency": "SGD",
+        "fx_rate_usd_sgd": float(fx_rate_usd_sgd),
+        # Long-history metrics + chart — from the legacy daily-rebalanced path
+        "ann_return": long_path["ann_return"],
+        "ann_vol": long_path["ann_vol"],
+        "sharpe": long_path["sharpe"],
+        "max_dd": long_path["max_dd"],
+        "nav": long_path["nav"],
+        "n_days": long_path["n_days"],
+        "windowed": windowed,
+    }
+
+
+def _book_performance_via_returns(
+    holdings_books: list[Portfolio],
+    *,
+    aum: float,
+    fx_rate_usd_sgd: float | None,
+    start: date | datetime | None,
+    end: date | datetime | None,
+    returns: pd.DataFrame | None,
+    price_source: Any | None = None,
+    fx_series_usd_sgd: pd.Series | None,
+    risk_free_rate: float,
+    align_window: bool,
+    to_sgd: Any,
+) -> dict[str, Any]:
+    """Legacy daily-rebalanced book-performance path — long-history chart
+    + Sharpe/vol/DD. Used both as the fallback when only in-memory wide
+    returns are supplied AND as the long-history companion to the new NAV
+    path inside :func:`book_performance`."""
+    panel = _build_returns_panel(
+        holdings_books,
+        price_source=price_source,
+        returns=returns,
+        start=start,
+        end=end,
+        fx_series_usd_sgd=fx_series_usd_sgd,
+    )
+    empty = {
+        "aum": aum,
+        "currency": "SGD",
+        "fx_rate_usd_sgd": fx_rate_usd_sgd,
+        "ann_return": 0.0,
+        "ann_vol": 0.0,
+        "sharpe": 0.0,
+        "max_dd": 0.0,
+        "nav": pd.Series(dtype=float),
+        "n_days": 0,
+        "windowed": pd.DataFrame(
+            columns=["period", "cum_return", "ann_return", "ann_vol",
+                     "sharpe", "max_dd", "days"]
+        ),
+    }
+    if panel.empty:
+        return empty
+    weights = pd.Series({
+        p.name: to_sgd(p.total_value, p.currency)
+        for p in holdings_books
+        if p.name in panel.columns
+    })
+    weights = weights / weights.sum()
+    panel = panel[weights.index]
+    if align_window:
+        common_start = max(panel[c].dropna().index.min() for c in panel.columns)
+        aligned_panel = panel.loc[common_start:].dropna(how="any")
+        book_return = (
+            (aligned_panel * weights).sum(axis=1)
+            if not aligned_panel.empty
+            else pd.Series(dtype=float)
+        )
+    else:
+        available = panel.notna().astype(float)
+        eff_weights = available.mul(weights, axis=1)
+        row_sums = eff_weights.sum(axis=1).replace(0.0, np.nan)
+        eff_weights = eff_weights.div(row_sums, axis=0)
+        book_return = (panel.fillna(0.0) * eff_weights).sum(axis=1).dropna()
+    if book_return.empty:
+        return empty
     metrics = PerformanceMetrics(book_return, risk_free_rate=risk_free_rate)
     nav = (1.0 + book_return).cumprod() * 100.0
     return {
         "aum": float(aum),
         "currency": "SGD",
-        "fx_rate_usd_sgd": float(fx_rate_usd_sgd),
+        "fx_rate_usd_sgd": float(fx_rate_usd_sgd) if fx_rate_usd_sgd is not None else None,
         "ann_return": float(metrics.annualised_return),
         "ann_vol": float(metrics.annualised_vol),
         "sharpe": float(metrics.sharpe),
@@ -476,6 +833,123 @@ def book_performance(
         "n_days": len(book_return),
         "windowed": _windowed_metrics(book_return, risk_free_rate=risk_free_rate),
     }
+
+
+_NAV_WINDOWS_CALENDAR: dict[str, int | None] = {
+    # NAV series is on calendar days, so windows are calendar-day counts.
+    # Matches the way the user / Stashaway app think about "this month".
+    "1M": 30,
+    "3M": 90,
+    "6M": 180,
+    "1Y": 365,
+    "All": None,
+}
+
+
+def _ytd_slice(nav: pd.Series) -> pd.Series:
+    """Slice of NAV from January 1st of the latest year present in the index.
+
+    YTD return = (NAV_today / NAV_Jan1) - 1, which equals
+    (today_price / Jan1_price) - 1 for buy-and-hold books. For sleeves the
+    user hasn't deposited into all year, this should match the app's YTD %.
+    """
+    if nav.empty:
+        return nav
+    last_year = nav.index[-1].year
+    jan1 = pd.Timestamp(year=last_year, month=1, day=1)
+    return nav[nav.index >= jan1]
+
+
+def _windowed_metrics_from_nav(
+    nav: pd.Series,
+    *,
+    risk_free_rate: float = 0.0,
+    statement_date: date | None = None,
+) -> pd.DataFrame:
+    """Per-window metrics derived from a buy-and-hold NAV series.
+
+    Unlike :func:`_windowed_metrics` (which compounds a daily-rebalanced
+    return series with **trading-day** windows), this takes the buy-and-hold
+    NAV directly and uses **calendar-day** windows (30/90/180/365). The NAV
+    panel is built on a calendar-day grid (weekends forward-filled), so
+    calendar windows are the natural slice. ``cum_return`` over any window =
+    ``NAV_end / NAV_start - 1`` exactly, so it ties to
+    ``portfolio_reconciliation`` totals.
+    """
+    def _row(label: str, sub: pd.Series) -> dict[str, Any]:
+        if len(sub) < 2:
+            return {
+                "period": label,
+                "cum_return": float("nan"),
+                "ann_return": float("nan"),
+                "ann_vol": float("nan"),
+                "sharpe": float("nan"),
+                "max_dd": float("nan"),
+                "days": int(len(sub)),
+            }
+        cum = float(sub.iloc[-1] / sub.iloc[0] - 1.0)
+        rets = sub.pct_change().dropna()
+        if rets.empty:
+            return {
+                "period": label,
+                "cum_return": cum,
+                "ann_return": float("nan"),
+                "ann_vol": float("nan"),
+                "sharpe": float("nan"),
+                "max_dd": float("nan"),
+                "days": int(len(sub)),
+            }
+        m = PerformanceMetrics(rets, risk_free_rate=risk_free_rate)
+        return {
+            "period": label,
+            "cum_return": cum,
+            "ann_return": float(m.annualised_return),
+            "ann_vol": float(m.annualised_vol),
+            "sharpe": float(m.sharpe),
+            "max_dd": float(m.max_drawdown),
+            "days": int(len(sub)),
+        }
+
+    rows: list[dict[str, Any]] = []
+    # Lead row: "Since statement" — anchors at the most recent statement_date
+    # so the cum_return ties exactly to the portfolio_reconciliation total.
+    if statement_date is not None and not nav.empty:
+        stmt_ts = pd.Timestamp(statement_date)
+        nav_since = nav[nav.index >= stmt_ts]
+        if len(nav_since) >= 2:
+            rows.append(_row(f"Since stmt ({statement_date})", nav_since))
+    # YTD — for sleeves the user hasn't touched all year, should approximately
+    # match the app's reported YTD return.
+    ytd_nav = _ytd_slice(nav)
+    if len(ytd_nav) >= 2:
+        anchor = ytd_nav.index[0].date()
+        rows.append(_row(f"YTD (since {anchor})", ytd_nav))
+    # Append the rolling-N-calendar-day windows with explicit anchor dates
+    # in the label so the user knows exactly what slice each row covers.
+    for label, n_days in _NAV_WINDOWS_CALENDAR.items():
+        sub = nav if n_days is None else nav.tail(n_days)
+        if not sub.empty:
+            anchor = sub.index[0].date()
+            full_label = f"{label} (since {anchor})"
+        else:
+            full_label = label
+        rows.append(_row(full_label, sub))
+
+    if not nav.empty:
+        first_year = nav.index.min().year
+        last_year = nav.index.max().year
+        for year in range(first_year, last_year + 1):
+            year_sub = nav[nav.index.year == year]
+            if year_sub.empty:
+                continue
+            jan1 = pd.Timestamp(year=year, month=1, day=1)
+            dec31 = pd.Timestamp(year=year, month=12, day=31)
+            is_partial = year_sub.index.min() > jan1 + pd.Timedelta(days=7) or (
+                year == last_year and year_sub.index.max() < dec31 - pd.Timedelta(days=7)
+            )
+            label = f"{year} (partial)" if is_partial else str(year)
+            rows.append(_row(label, year_sub))
+    return pd.DataFrame(rows)
 
 
 def _windowed_metrics(returns: pd.Series, *, risk_free_rate: float = 0.0) -> pd.DataFrame:
@@ -561,17 +1035,19 @@ def holdings_reconciliation(
     end: date | datetime,
     price_source: Any | None = None,
     fx_series_usd_sgd: pd.Series | None = None,
+    target_weights: dict[str, float] | None = None,
 ) -> pd.DataFrame:
     """Per-holding statement→today reconciliation for one portfolio.
 
     Returns a DataFrame with columns:
-    ``ticker, label, weight, stmt_value, stmt_price, today_price, return,
-    today_value, delta``. All values in the portfolio's native currency
-    (USD or SGD); for USD portfolios with ``fx_series_usd_sgd`` supplied,
-    also returns ``stmt_value_sgd / today_value_sgd / delta_sgd``.
+    ``ticker, label, weight, weight_basis, stmt_value, stmt_price, today_price,
+    return, today_value, delta``. All values in the portfolio's native currency.
 
-    Used by the per-portfolio drill-down section in the Phase 1 HTML report —
-    lets the user trace a sleeve's PnL back to each individual holding.
+    ``target_weights`` (optional): ``{stashaway_id: target_weight}`` from
+    ``load_target_weights``. When provided and a holding has a target weight,
+    that weight is used instead of the statement-date actual weight — closer
+    to Stashaway's steady-state allocation (they continuously rebalance toward
+    target). ``weight_basis`` column flags "target" or "statement" per row.
     """
     end_date = end.date() if isinstance(end, datetime) else end
     fetch_start = portfolio.statement_date - timedelta(days=7)
@@ -632,10 +1108,21 @@ def holdings_reconciliation(
             return True
         return False
 
+    targets = target_weights or {}
     rows: list[dict[str, Any]] = []
     for h in portfolio.holdings:
         t = h.metadata.ticker
-        stmt_value = h.weight * portfolio.total_value
+        # Use target weight when available; else fall back to stmt-date actual.
+        # Targets reflect Stashaway's steady-state rebalancing anchor and yield
+        # closer reconciliation to the app for actively-rebalanced sleeves.
+        target_w = targets.get(h.stashaway_id)
+        if target_w is not None:
+            weight_used = target_w
+            weight_basis = "target"
+        else:
+            weight_used = h.weight
+            weight_basis = "statement"
+        stmt_value = weight_used * portfolio.total_value
         label = f"{h.metadata.asset_class} · {h.metadata.region}"
         accrued_days = 0
         if t.startswith("CASH_"):
@@ -679,8 +1166,10 @@ def holdings_reconciliation(
         today_value = stmt_value * (1.0 + ret)
         row = {
             "ticker": t,
+            "data_source": getattr(h.metadata, "data_source", "real"),
             "label": label,
-            "weight": h.weight,
+            "weight": weight_used,
+            "weight_basis": weight_basis,
             "stmt_value": stmt_value,
             "stmt_price": stmt_price,
             "stmt_date_used": stmt_date_used,
@@ -699,6 +1188,171 @@ def holdings_reconciliation(
     return pd.DataFrame(rows).sort_values("stmt_value", ascending=False).reset_index(drop=True)
 
 
+def _resolve_target_series(
+    entry: dict[str, float] | list[tuple[date, dict[str, float]]] | None,
+) -> list[tuple[date, dict[str, float]]] | None:
+    """Normalise a target-weights entry to time-series form sorted desc by date.
+
+    Accepts either the new ``list[(date, weights)]`` form or the legacy flat
+    ``dict[sid, weight]`` form (treated as a single snapshot effective today).
+    Returns None for empty / falsy input.
+    """
+    if not entry:
+        return None
+    if isinstance(entry, list):
+        return entry
+    if isinstance(entry, dict):
+        return [(date.today(), entry)]
+    return None
+
+
+def _piecewise_segments(
+    stmt: date,
+    end_date: date,
+    target_series: list[tuple[date, dict[str, float]]] | None,
+    stmt_weights: dict[str, float],
+) -> list[tuple[date, date, dict[str, float], str]]:
+    """Slice (stmt, end_date] at every target-change date.
+
+    Returns ``[(seg_start, seg_end, weights, basis), ...]`` where *basis* is
+    ``"target"`` when the segment uses an explicit target snapshot or
+    ``"statement"`` when falling back to stmt-date actual weights.
+
+    Fallback to stmt weights happens per-segment when the segment's effective
+    targets are missing or don't sum to ~1.0 (treat as data-entry error).
+    """
+    if target_series:
+        changes = sorted({d for d, _ in target_series if stmt < d <= end_date})
+    else:
+        changes = []
+    boundaries = [stmt, *changes, end_date]
+    out: list[tuple[date, date, dict[str, float], str]] = []
+    for i in range(len(boundaries) - 1):
+        seg_start = boundaries[i]
+        seg_end = boundaries[i + 1]
+        if seg_end < seg_start:
+            continue
+        w = _target_weights_at(target_series, seg_start) if target_series else None
+        if w is None or abs(sum(w.values()) - 1.0) > 0.05:
+            out.append((seg_start, seg_end, stmt_weights, "statement"))
+        else:
+            out.append((seg_start, seg_end, w, "target"))
+    return out
+
+
+def _piecewise_compound_native(
+    p: Portfolio,
+    end_date: date,
+    target_series: list[tuple[date, dict[str, float]]] | None,
+    close_at: Any,  # callable (ticker, date) -> (price | None, actual_date | None)
+    is_cash_like: Any,  # callable (asset_class, sector) -> bool
+) -> tuple[float, list[str]]:
+    """Native-currency value of *p* on *end_date* compounded piecewise.
+
+    For each sub-period [t_i, t_{i+1}] within (stmt_date, end_date]:
+      sub_return = Σ_h weights_i[h] × (price_h(t_{i+1}) / price_h(t_i))
+    Final value = stmt_total × Π sub_returns × (1 - fee_prorated).
+
+    Returns ``(today_native, basis_per_segment)`` where the second item is the
+    list of segment bases ("target" or "statement") — useful for diagnostics.
+    """
+    holdings_by_sid = {h.stashaway_id: h for h in p.holdings}
+    stmt_weights = {h.stashaway_id: h.weight for h in p.holdings}
+    segments = _piecewise_segments(
+        p.statement_date, end_date, target_series, stmt_weights
+    )
+
+    cum_factor = 1.0
+    bases: list[str] = []
+    for seg_start, seg_end, weights, basis in segments:
+        if seg_end <= seg_start:
+            continue
+        bases.append(basis)
+        seg_sum = 0.0
+        for sid, w in weights.items():
+            if w == 0:
+                continue
+            h = holdings_by_sid.get(sid)
+            if h is None:
+                seg_sum += w * 1.0
+                continue
+            t = h.metadata.ticker
+            if t.startswith("CASH_"):
+                seg_sum += w * 1.0  # M5 dropped — synthetic cash returns zero
+                continue
+            p0, d0 = close_at(t, seg_start)
+            p1, d1 = close_at(t, seg_end)
+            if p0 is None or p1 is None or p0 <= 0:
+                seg_sum += w * 1.0
+                continue
+            if (
+                d1 is not None and d0 is not None and d1 < seg_end
+                and is_cash_like(h.metadata.asset_class, h.metadata.sector)
+            ):
+                in_data_days = max((d1 - d0).days, 1)
+                missing_days = (seg_end - d1).days
+                if missing_days > 0:
+                    ann_yield = (p1 / p0) ** (365.0 / in_data_days) - 1.0
+                    accrual = (1.0 + ann_yield) ** (missing_days / 365.0) - 1.0
+                    p1 = p1 * (1.0 + accrual)
+            seg_sum += w * (p1 / p0)
+        cum_factor *= seg_sum
+
+    fee_annual = float(p.metadata.get("management_fee_annual", 0.0))
+    if fee_annual > 0:
+        days = max((end_date - p.statement_date).days, 0)
+        cum_factor *= (1.0 - fee_annual * days / 365.0)
+
+    return p.total_value * cum_factor, bases
+
+
+def _validate_target_coverage(
+    portfolios: Sequence[Portfolio],
+    target_weights_by_portfolio: (
+        dict[str, dict[str, float]]
+        | dict[str, list[tuple[date, dict[str, float]]]]
+        | None
+    ),
+    as_of: date | None = None,
+) -> dict[str, dict[str, float]]:
+    """Resolve and validate the target weight set effective at *as_of* for each
+    portfolio. Drops any portfolio whose target set doesn't cover every
+    holding (mixed target + stmt fallback would double-count weight).
+
+    Accepts both the old flat ``{port: weights}`` and the new time-series
+    ``{port: [(date, weights), ...]}`` form for backward compatibility.
+    Falls back to the latest snapshot when ``as_of`` is omitted.
+    """
+    if not target_weights_by_portfolio:
+        return {}
+    cleaned: dict[str, dict[str, float]] = {}
+    for p in portfolios:
+        entry = target_weights_by_portfolio.get(p.name)
+        if not entry:
+            continue
+        # Old form: dict[sid, weight] — treat as latest snapshot
+        if isinstance(entry, dict):
+            targets: dict[str, float] | None = entry
+        else:
+            # New form: list of (date, weights), sorted desc
+            targets = _target_weights_at(entry, as_of or date.today())
+        if targets is None:
+            continue
+        holding_ids = {h.stashaway_id for h in p.holdings}
+        missing = holding_ids - set(targets)
+        if missing:
+            warnings.warn(
+                f"Target weights for {p.name!r} (as of {as_of or 'latest'}) miss "
+                f"holdings {sorted(missing)}; falling back to statement-date "
+                f"weights for this portfolio. Add a dated Target % column "
+                f"covering these in data/holding links.xlsx.",
+                stacklevel=2,
+            )
+            continue
+        cleaned[p.name] = targets
+    return cleaned
+
+
 def portfolio_reconciliation(
     portfolios: Sequence[Portfolio],
     *,
@@ -706,6 +1360,7 @@ def portfolio_reconciliation(
     price_source: Any | None = None,
     returns: pd.DataFrame | None = None,  # kept for API compat — not used
     fx_series_usd_sgd: pd.Series | None = None,
+    target_weights_by_portfolio: dict[str, dict[str, float]] | None = None,
 ) -> pd.DataFrame:
     """Project each portfolio's value from its statement date to ``end``.
 
@@ -775,46 +1430,20 @@ def portfolio_reconciliation(
         sec = (sector or "").lower()
         return ac == "cash" or "money market" in sec or "treasury 0-3m" in sec
 
+    # Piecewise: slice (stmt_date, end_date] at every target-change date and
+    # compound segment by segment. For sleeves with no mid-period target
+    # change this reduces to single-segment (same answer as the prior
+    # implementation). For sleeves that DID change targets mid-period (e.g.
+    # GI Crypto removal on May 26) each sub-period uses its own effective
+    # targets and the cumulative product captures the rebalancing.
     rows: list[dict[str, Any]] = []
     for p in holdings_books:
-        today_native = 0.0
-        for h in p.holdings:
-            stmt_value = h.weight * p.total_value
-            t = h.metadata.ticker
-            if t.startswith("CASH_"):
-                # Synthetic cash: apply the annual yield prorated by elapsed
-                # calendar days — vol is irrelevant for point-to-point.
-                days = max((end_date - p.statement_date).days, 0)
-                yield_pa = _CASH_ANNUAL_YIELDS.get(t, 0.0)
-                holding_ret = (1 + yield_pa) ** (days / 365.0) - 1
-                today_native += stmt_value * (1 + holding_ret)
-                continue
-            p_stmt, d_stmt = _close_asof_with_date(t, p.statement_date)
-            p_end, d_end = _close_asof_with_date(t, end_date)
-            if p_stmt is None or p_end is None or p_stmt <= 0:
-                today_native += stmt_value
-                continue
-            # Forward-accrue stale low-vol prices (cash / MMF / 0-3M Treasury)
-            # using the holding's own realised yield over the available window.
-            if (
-                d_end is not None
-                and d_stmt is not None
-                and d_end < end_date
-                and _is_cash_like(h.metadata.asset_class, h.metadata.sector)
-            ):
-                in_data_days = max((d_end - d_stmt).days, 1)
-                missing_days = (end_date - d_end).days
-                if missing_days > 0:
-                    ann_yield = (p_end / p_stmt) ** (365.0 / in_data_days) - 1.0
-                    accrual = (1.0 + ann_yield) ** (missing_days / 365.0) - 1.0
-                    p_end = p_end * (1.0 + accrual)
-            today_native += stmt_value * (p_end / p_stmt)
-
-        # Apply management fee (prorated) — same convention as portfolio_returns
-        fee_annual = float(p.metadata.get("management_fee_annual", 0.0))
-        if fee_annual > 0:
-            days = max((end_date - p.statement_date).days, 0)
-            today_native *= (1.0 - fee_annual * days / 365.0)
+        target_series = _resolve_target_series(
+            target_weights_by_portfolio.get(p.name) if target_weights_by_portfolio else None
+        )
+        today_native, _ = _piecewise_compound_native(
+            p, end_date, target_series, _close_asof_with_date, _is_cash_like
+        )
 
         cum_native = (today_native / p.total_value) - 1.0 if p.total_value > 0 else 0.0
 
@@ -1489,6 +2118,12 @@ def render_html_report(
             strict=True,
         )
 
+    # Load user-maintained target weights (per-portfolio, per-holding) so the
+    # entire report uses Stashaway's rebalancing anchor instead of just the
+    # statement-date snapshot. Empty dict if file or column not present —
+    # everything falls back gracefully to statement weights.
+    target_weights_by_portfolio = load_target_weights()
+
     book_perf = book_performance(
         portfolios,
         start=start,
@@ -1498,6 +2133,7 @@ def render_html_report(
         fx_rate_usd_sgd=fx_rate_usd_sgd,
         fx_series_usd_sgd=fx_series_usd_sgd,
         align_window=align_window,
+        target_weights_by_portfolio=target_weights_by_portfolio,
     )
     reconciliation_end = (
         reconciliation_as_of
@@ -1510,6 +2146,7 @@ def render_html_report(
         price_source=price_source,
         returns=returns,
         fx_series_usd_sgd=fx_series_usd_sgd,
+        target_weights_by_portfolio=target_weights_by_portfolio,
     )
     reconciliation_as_of_label = (
         reconciliation_end.isoformat()
@@ -1590,6 +2227,7 @@ def render_html_report(
             end=reconciliation_end,
             price_source=price_source,
             fx_series_usd_sgd=fx_series_usd_sgd,
+            target_weights_by_portfolio=target_weights_by_portfolio,
         ),
         redundancy=_redundancy_to_html(pairs, threshold=redundancy_threshold),
         risk_by_portfolio=_risk_to_html(risk["by_portfolio"]),
@@ -1750,6 +2388,144 @@ def _reconciliation_to_html(df: pd.DataFrame) -> str:
 
 
 _PORTFOLIO_GOAL_RE = re.compile(r"/goal/([0-9a-f]{24})", re.IGNORECASE)
+_HOLDING_LINK_RE = re.compile(r"/asset-details/([^/]+)/")
+_PORTFOLIO_ALIASES = {"SRS": "General SRS"}
+_TARGET_COL_RE = re.compile(r"^\s*Target\s*%\s*(\d{4}-\d{2}-\d{2})?\s*$", re.IGNORECASE)
+
+
+def load_target_weights(
+    links_path: Path = Path("data/holding links.xlsx"),
+) -> dict[str, list[tuple[date, dict[str, float]]]]:
+    """Read user-maintained target-weight time series from the holding-links Excel.
+
+    Returns ``{portfolio_name: [(effective_date, {stashaway_id: weight}), ...]}``
+    sorted **descending** by effective date (most recent first). Each
+    ``Target %`` column in the source becomes one entry:
+
+    - ``Target %`` (no date) → assumed effective at today
+    - ``Target % 2026-05-26`` → effective from 2026-05-26 onward until the
+      next snapshot, or until today if it's the latest
+
+    Callers (``portfolio_reconciliation`` etc.) slice the relevant query
+    period by these effective dates to pick the right target for each
+    sub-period. Portfolios without any target columns are absent from the
+    result and the reconciler falls back to statement-date weights.
+    """
+    if not links_path.exists():
+        return {}
+    try:
+        import openpyxl
+    except ImportError:
+        return {}
+    cash_alias = {"USD": "CASH_USD", "SGD": "CASH_SGD"}
+    snapshots: dict[date, dict[str, dict[str, float]]] = {}
+    try:
+        wb = openpyxl.load_workbook(links_path, data_only=False)
+        if "Portfolios" not in wb.sheetnames:
+            return {}
+        ws = wb["Portfolios"]
+        HEADER_ROW = 7
+        hdr_to_col: dict[str, int] = {}
+        target_cols: list[tuple[date, int]] = []
+        for c in range(1, ws.max_column + 1):
+            v = ws.cell(row=HEADER_ROW, column=c).value
+            if v is None:
+                continue
+            label = str(v).strip()
+            hdr_to_col[label] = c
+            m = _TARGET_COL_RE.match(label)
+            if m:
+                date_str = m.group(1)
+                eff_date = (
+                    datetime.strptime(date_str, "%Y-%m-%d").date()
+                    if date_str
+                    else date.today()
+                )
+                target_cols.append((eff_date, c))
+        if not target_cols:
+            return {}
+        from hailmary.allocation.universe import STASHAWAY_UNIVERSE as UNIV
+
+        port_col = hdr_to_col.get("Port", 6)
+        link_col = hdr_to_col.get("Link", 10)
+        yt_col = hdr_to_col.get("Yahoo Ticker")
+        # Reverse-lookup: Yahoo ticker → Stashaway ID for the fallback path
+        # (used when a row's Link cell lacks a hyperlink, e.g. user-added rows
+        # for re-introduced or historical holdings).
+        ticker_to_sid: dict[str, str] = {}
+        for sid, meta in UNIV.items():
+            ticker_to_sid.setdefault(meta.ticker, sid)
+            # Also accept the SID itself as a valid Yahoo Ticker entry
+            ticker_to_sid.setdefault(sid, sid)
+
+        for eff_date, target_col in target_cols:
+            for r in range(HEADER_ROW + 1, ws.max_row + 1):
+                port = ws.cell(row=r, column=port_col).value
+                link_cell = ws.cell(row=r, column=link_col)
+                tw = ws.cell(row=r, column=target_col).value
+                if port is None or tw is None:
+                    continue
+                name = _PORTFOLIO_ALIASES.get(str(port), str(port))
+                url = link_cell.hyperlink.target if link_cell.hyperlink else ""
+                m = _HOLDING_LINK_RE.search(str(url))
+                if m:
+                    sid = m.group(1).upper()
+                    sid = cash_alias.get(sid, sid)
+                else:
+                    # Fallback to Yahoo Ticker column — handles rows added
+                    # manually (e.g. re-introduced FBTC/FETH historical
+                    # targets) where the user didn't copy a hyperlink.
+                    yt = ws.cell(row=r, column=yt_col).value if yt_col else None
+                    yt_str = str(yt).strip() if yt is not None else ""
+                    if not yt_str:
+                        continue
+                    sid = ticker_to_sid.get(yt_str)
+                    if sid is None:
+                        sid = ticker_to_sid.get(yt_str.upper())
+                    if sid is None:
+                        continue  # no resolution path — skip
+                snap = snapshots.setdefault(eff_date, {}).setdefault(name, {})
+                snap[sid] = snap.get(sid, 0.0) + float(tw)
+    except Exception:
+        return {}
+
+    # Drop snapshots whose weights don't sum to ~1.0 (data entry errors)
+    cleaned: dict[date, dict[str, dict[str, float]]] = {}
+    for eff_date, by_port in snapshots.items():
+        kept: dict[str, dict[str, float]] = {}
+        for name, weights in by_port.items():
+            s = sum(weights.values())
+            if abs(s - 1.0) > 0.02:
+                warnings.warn(
+                    f"Target weights for {name!r} on {eff_date}: sum to {s:.4f}, "
+                    "not 1.0. Skipping this snapshot for the portfolio.",
+                    stacklevel=2,
+                )
+                continue
+            kept[name] = weights
+        if kept:
+            cleaned[eff_date] = kept
+
+    # Invert: per-portfolio time series sorted desc by effective date
+    out: dict[str, list[tuple[date, dict[str, float]]]] = {}
+    for eff_date, by_port in cleaned.items():
+        for name, weights in by_port.items():
+            out.setdefault(name, []).append((eff_date, weights))
+    for name in out:
+        out[name].sort(key=lambda x: x[0], reverse=True)
+    return out
+
+
+def _target_weights_at(
+    series: list[tuple[date, dict[str, float]]] | None, as_of: date
+) -> dict[str, float] | None:
+    """Return target weights effective on or before *as_of* (or None)."""
+    if not series:
+        return None
+    for eff_date, weights in series:  # sorted desc
+        if eff_date <= as_of:
+            return weights
+    return None
 
 
 def _portfolio_goal_links(
@@ -1808,6 +2584,7 @@ def _holdings_drilldown_to_html(
     end: date | datetime,
     price_source: Any | None = None,
     fx_series_usd_sgd: pd.Series | None = None,
+    target_weights_by_portfolio: dict[str, dict[str, float]] | None = None,
 ) -> str:
     """Render a collapsible per-portfolio drill-down listing each holding's
     starting value, return since statement, current value, and weight.
@@ -1834,11 +2611,31 @@ def _holdings_drilldown_to_html(
         "copies headers + rows + the Total row as tab-separated text — paste straight "
         "into Excel/Sheets. Portfolio names are linked to the Stashaway app where "
         "discoverable from your <code>holding links.xlsx</code>.</p>"
+        '<p class="footnote">Ticker badges: <strong>🟡synth</strong> = '
+        "synthetic series (no real ticker — return modelled from a published "
+        "yield, e.g. CASH_USD/CASH_SGD). <strong>🟠proxy</strong> = real "
+        "ticker but a different (structurally similar) fund than what "
+        "Stashaway holds; expect modest tracking drift. Unbadged tickers "
+        "are the exact fund Stashaway holds (verified by ISIN or longName).</p>"
+    )
+    end_date = end.date() if isinstance(end, datetime) else end
+    # Use the target effective at each portfolio's STATEMENT date (start of
+    # the reconciliation period) rather than today's. For the GI Crypto
+    # removal case: Apr-30 targets still include FBTC/FETH, which is closer
+    # to what was actually held for most of stmt→today. Future enhancement:
+    # piecewise reconciliation that slices at every target-change event.
+    target_book = _validate_target_coverage(
+        holdings_books, target_weights_by_portfolio,
+        as_of=min((p.statement_date for p in holdings_books), default=end_date),
     )
     sections: list[str] = []
     for p in holdings_books:
         df = holdings_reconciliation(
-            p, end=end, price_source=price_source, fx_series_usd_sgd=fx_series_usd_sgd
+            p,
+            end=end,
+            price_source=price_source,
+            fx_series_usd_sgd=fx_series_usd_sgd,
+            target_weights=target_book.get(p.name),
         )
         if df.empty:
             continue
@@ -1959,6 +2756,26 @@ def _holdings_drilldown_to_html(
                     df_with_total["today_date_used"],
                     df_with_total["accrued_days"],
                 )
+            ]
+        # Decorate Ticker cell with a small badge for proxy / synthetic so the
+        # user can see at a glance which rows are not the real underlying fund.
+        if "data_source" in df_with_total.columns:
+            def _badge_ticker(t: str, ds: object) -> str:
+                if not isinstance(t, str):
+                    return t
+                ds_str = (
+                    ds.lower()
+                    if isinstance(ds, str)
+                    else "real"  # Total row + missing → no badge
+                )
+                if ds_str == "synthetic":
+                    return f"{t} 🟡synth"
+                if ds_str == "proxy":
+                    return f"{t} 🟠proxy"
+                return t
+            df_with_total["ticker"] = [
+                _badge_ticker(t, ds)
+                for t, ds in zip(df_with_total["ticker"], df_with_total["data_source"])
             ]
 
         def _fmt_date(v: Any) -> str:

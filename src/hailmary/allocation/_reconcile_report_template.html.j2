@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>{{ title }}</title>
+<style>
+  body { font-family: Inter, system-ui, sans-serif; background: #0d1117; color: #e6edf3;
+         margin: 0; padding: 24px; max-width: 1400px; }
+  h1, h2, h3 { color: #e6edf3; }
+  h1 { margin: 0 0 4px 0; }
+  h2 { border-bottom: 1px solid #30363d; padding-bottom: 6px; margin-top: 32px; }
+  .meta { color: #8b949e; font-size: 13px; }
+  .meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+               gap: 12px; margin: 16px 0; }
+  .meta-card { background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+               padding: 10px 14px; }
+  .meta-card .label { font-size: 11px; color: #8b949e; text-transform: uppercase; }
+  .meta-card .val   { font-size: 16px; font-weight: 600; margin-top: 4px;
+                      font-variant-numeric: tabular-nums; color: #e6edf3; }
+  .ds-table { border-collapse: collapse; margin-top: 8px; font-size: 12.5px; width: 100%; }
+  .ds-table th, .ds-table td { border: 1px solid #30363d; padding: 5px 9px; text-align: right; }
+  .ds-table th { background: #161b22; text-align: left; }
+  .ds-table td:first-child, .ds-table th:first-child { text-align: left; }
+  .ds-table td:nth-child(2), .ds-table th:nth-child(2) { text-align: center; }
+  .ds-table td { font-variant-numeric: tabular-nums; }
+  .ds-table tbody tr:hover { background: #1f2730; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px;
+           font-size: 11px; font-weight: 600; }
+  .badge.ok { background: rgba(63, 185, 80, 0.18); color: #3fb950; }
+  .badge.noise { background: rgba(210, 153, 34, 0.18); color: #d29922; }
+  .badge.warn { background: rgba(248, 81, 73, 0.20); color: #f85149; }
+  .badge.muted { background: #21262d; color: #8b949e; }
+  .footnote { color: #8b949e; font-size: 12px; max-width: 1100px; line-height: 1.55; }
+  .footnote ul { padding-left: 20px; }
+  .footnote li { margin-bottom: 6px; }
+  .footnote code { background: #161b22; padding: 1px 5px; border-radius: 3px; font-size: 11.5px; }
+  .deposits-log td { font-variant-numeric: tabular-nums; }
+  .copy-wrap { margin-top: 8px; }
+  .copy-btn { background: #161b22; color: #8b949e; border: 1px solid #30363d;
+              border-radius: 4px; padding: 3px 9px; font-size: 11px;
+              font-family: inherit; cursor: pointer; user-select: none; }
+  .copy-btn:hover { background: #1f2730; color: #e6edf3; border-color: #58a6ff; }
+  .copy-btn.copied { background: rgba(63, 185, 80, 0.18); color: #3fb950;
+                     border-color: #3fb950; }
+  details.drill { background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+                  padding: 8px 14px; margin: 8px 0; }
+  details.drill[open] { padding-bottom: 14px; }
+  details.drill summary { cursor: pointer; user-select: none; font-size: 13px;
+                          color: #e6edf3; padding: 4px 0; }
+  details.drill summary:hover { color: #58a6ff; }
+  details.drill summary .pos { color: #3fb950; }
+  details.drill summary .neg { color: #f85149; }
+  details.drill summary a.port-link { color: #58a6ff; font-weight: 600;
+                                       text-decoration: none; border-bottom: 1px dotted #58a6ff; }
+  details.drill summary a.port-link:hover { color: #a371f7; border-bottom-color: #a371f7; }
+  details.drill .ds-holdings { margin-top: 10px; width: 100%; max-width: 1300px; }
+</style>
+</head><body>
+<h1>{{ title }}</h1>
+<p class="meta">Generated {{ generated_at }}</p>
+
+<div class="meta-grid">
+  <div class="meta-card"><div class="label">Statement Date</div>
+       <div class="val">{{ statement_date }}</div></div>
+  <div class="meta-card"><div class="label">Reconciliation As-Of</div>
+       <div class="val">{{ end_date }}</div></div>
+  <div class="meta-card"><div class="label">App Start Snapshot</div>
+       <div class="val">{{ start_snapshot_date }}</div></div>
+  <div class="meta-card"><div class="label">App End Snapshot</div>
+       <div class="val">{{ snapshot_date }}</div></div>
+  <div class="meta-card"><div class="label">Deposits Logged Since Stmt</div>
+       <div class="val">{{ n_deposits }}</div></div>
+</div>
+
+<h2>Reconciliation — Performance + Model accuracy</h2>
+<p class="footnote">App start and App end both come from your
+<code>Portfolio SGD Values</code> sheet — they are the values Stashaway showed
+on those dates. <strong>Δ Perf</strong> = app_end − app_start − deposits
+(real performance, deposit-adjusted). <strong>Our Model</strong> is the
+piecewise-compounded sleeve value used to validate the model. <strong>Gap</strong>
+= our model + deposits − app_end. Status:
+<span class="badge ok">exact</span> &lt; 0.05% &nbsp;
+<span class="badge ok">ok</span> &lt; 0.3% &nbsp;
+<span class="badge noise">noise</span> &lt; 1% &nbsp;
+<span class="badge warn">⚠ investigate</span> ≥ 1%.</p>
+{{ reconcile_table | safe }}
+
+<h2>Per-portfolio drill-down — holding-by-holding</h2>
+<p class="footnote">Click any portfolio to expand its holdings. For each holding: weight,
+stmt value, stmt and today prices (with the actual price-date used — flagged with
+<code>*</code> and <code>(+Nd)</code> when forward-accrued because Yahoo lags), return,
+today value. <strong>Total row</strong> at the bottom of each sleeve sums to the same
+"Total" cell in the reconciliation table above.</p>
+{{ drilldown | safe }}
+
+<h2>Deposits log (post-stmt)</h2>
+<p class="footnote">Rows from <code>holding links.xlsx</code> &gt; Deposits sheet, filtered to
+dates after the statement. Anything on/before {{ statement_date }} is already in the statement's
+<code>total_value</code> and not counted again.</p>
+{{ deposits_log | safe }}
+
+<h2>Methodology</h2>
+<div class="footnote">
+{{ methodology | safe }}
+</div>
+
+<script>
+(function () {
+  function tableToTsv(table) {
+    var lines = [];
+    var headerRows = table.querySelectorAll("thead tr");
+    var headerRow = headerRows[headerRows.length - 1];
+    if (headerRow) {
+      lines.push(Array.prototype.map.call(headerRow.cells, function (c) {
+        return c.textContent.trim();
+      }).join("\t"));
+    }
+    var tbody = table.querySelector("tbody");
+    if (tbody) {
+      Array.prototype.forEach.call(tbody.rows, function (r) {
+        lines.push(Array.prototype.map.call(r.cells, function (c) {
+          return c.textContent.trim();
+        }).join("\t"));
+      });
+    }
+    var foot = table.querySelector("tfoot");
+    if (foot) {
+      Array.prototype.forEach.call(foot.rows, function (r) {
+        lines.push(Array.prototype.map.call(r.cells, function (c) {
+          return c.textContent.trim();
+        }).join("\t"));
+      });
+    }
+    return lines.join("\n");
+  }
+  function attach(table) {
+    if (table.dataset.copyAttached) return;
+    table.dataset.copyAttached = "1";
+    var wrap = document.createElement("div");
+    wrap.className = "copy-wrap";
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "copy-btn";
+    btn.textContent = "📋 Copy table";
+    btn.addEventListener("click", function () {
+      var tsv = tableToTsv(table);
+      var done = function () {
+        btn.textContent = "✓ Copied";
+        btn.classList.add("copied");
+        setTimeout(function () {
+          btn.textContent = "📋 Copy table";
+          btn.classList.remove("copied");
+        }, 1400);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(tsv).then(done);
+      } else {
+        var ta = document.createElement("textarea");
+        ta.value = tsv;
+        document.body.appendChild(ta); ta.select();
+        try { document.execCommand("copy"); done(); }
+        finally { document.body.removeChild(ta); }
+      }
+    });
+    wrap.appendChild(btn);
+    table.parentNode.insertBefore(wrap, table);
+  }
+  document.addEventListener("DOMContentLoaded", function () {
+    document.querySelectorAll("table.ds-table").forEach(attach);
+  });
+})();
+</script>
+</body></html>

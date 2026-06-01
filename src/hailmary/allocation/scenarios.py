@@ -190,9 +190,9 @@ def set_weights(
     """Replace one portfolio's holding weights with the supplied mapping.
 
     Keys in ``weights`` are matched against existing holdings'
-    ``stashaway_id``. The values must sum to ``1.0 ± WEIGHT_TOLERANCE``.
+    ``ticker``. The values must sum to ``1.0 ± WEIGHT_TOLERANCE``.
     Each existing holding has its weight overwritten with the value from
-    ``weights``; holdings whose ``stashaway_id`` doesn't appear in
+    ``weights``; holdings whose ``ticker`` doesn't appear in
     ``weights`` raise — the caller must explicitly assign 0.0 to zero out
     a holding (or omit the helper and construct a new ``Portfolio`` if
     they want to add new tickers).
@@ -209,11 +209,11 @@ def set_weights(
             f"expected 1.0 ± {WEIGHT_TOLERANCE}"
         )
     target = index[portfolio_name]
-    existing_ids = {h.stashaway_id for h in target.holdings}
+    existing_ids = {h.ticker for h in target.holdings}
     unknown = set(weights) - existing_ids
     if unknown:
         raise ScenarioEditError(
-            f"Unknown stashaway_id(s) in weights for {portfolio_name!r}: "
+            f"Unknown ticker(s) in weights for {portfolio_name!r}: "
             f"{sorted(unknown)}. Existing: {sorted(existing_ids)}"
         )
     missing = existing_ids - set(weights)
@@ -226,9 +226,9 @@ def set_weights(
 
     new_holdings = [
         Holding(
-            stashaway_id=h.stashaway_id,
-            weight=weights[h.stashaway_id],
-            value=weights[h.stashaway_id] * target.total_value,
+            ticker=h.ticker,
+            weight=weights[h.ticker],
+            value=weights[h.ticker] * target.total_value,
             metadata=h.metadata,
         )
         for h in target.holdings
@@ -266,7 +266,7 @@ def rebalance_into(
     new_value = dst.total_value + src.total_value
     new_holdings = [
         Holding(
-            stashaway_id=h.stashaway_id,
+            ticker=h.ticker,
             weight=h.weight,
             value=h.weight * new_value,
             metadata=h.metadata,
@@ -291,7 +291,7 @@ def merge_into(
     """Combine ``names`` into one value-weighted portfolio named ``into``.
 
     New ``total_value`` = sum of sources. New holdings = value-weighted union
-    of sources' holdings (same ``stashaway_id`` held in multiple sources gets
+    of sources' holdings (same ``ticker`` held in multiple sources gets
     summed). Source portfolios are removed. ``into`` may be the name of one
     of the source portfolios (in which case that one is conceptually replaced
     with the merged result) or a new name. All sources must share a currency.
@@ -326,13 +326,13 @@ def merge_into(
     for p in sources:
         for h in p.holdings:
             entry = aggregated.setdefault(
-                h.stashaway_id,
+                h.ticker,
                 {"value": 0.0, "metadata": h.metadata},
             )
             entry["value"] += h.weight * p.total_value
     new_holdings = [
         Holding(
-            stashaway_id=sid,
+            ticker=sid,
             weight=(entry["value"] / new_value) if new_value > 0 else 0.0,
             value=entry["value"],
             metadata=entry["metadata"],

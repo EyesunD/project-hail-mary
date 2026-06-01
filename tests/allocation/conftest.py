@@ -67,7 +67,7 @@ def _portfolio(
     statement_date: date = date(2024, 9, 30),
 ) -> Portfolio:
     holdings = [
-        Holding(stashaway_id=t, weight=w, value=w * total_value, metadata=STASHAWAY_UNIVERSE[t])
+        Holding(ticker=t, weight=w, value=w * total_value, metadata=STASHAWAY_UNIVERSE[t])
         for t, w in weights.items()
     ]
     return Portfolio(

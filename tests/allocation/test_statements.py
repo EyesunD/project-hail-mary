@@ -35,8 +35,8 @@ def test_load_holdings_from_json_happy_path(tmp_path: Path) -> None:
                     "name": "Custom Growth",
                     "total_value": 100_000,
                     "holdings": [
-                        {"stashaway_id": "VTI", "weight": 0.7, "value": 70_000},
-                        {"stashaway_id": "VEA", "weight": 0.3, "value": 30_000},
+                        {"ticker": "VTI", "weight": 0.7, "value": 70_000},
+                        {"ticker": "VEA", "weight": 0.3, "value": 30_000},
                     ],
                 }
             ],
@@ -63,8 +63,8 @@ def test_load_holdings_from_json_invalid_weights(tmp_path: Path) -> None:
                     "name": "Bad Portfolio",
                     "total_value": 100_000,
                     "holdings": [
-                        {"stashaway_id": "VTI", "weight": 0.6, "value": 60_000},
-                        {"stashaway_id": "VEA", "weight": 0.3, "value": 30_000},
+                        {"ticker": "VTI", "weight": 0.6, "value": 60_000},
+                        {"ticker": "VEA", "weight": 0.3, "value": 30_000},
                         # sums to 0.9 — should fail validation
                     ],
                 }
@@ -119,8 +119,8 @@ def _sample_portfolios() -> list[ParsedPortfolio]:
             currency="USD",
             total_value=100_000,
             holdings=[
-                ParsedHolding(stashaway_id="VTI", weight=0.7, value=70_000),
-                ParsedHolding(stashaway_id="VEA", weight=0.3, value=30_000),
+                ParsedHolding(ticker="VTI", weight=0.7, value=70_000),
+                ParsedHolding(ticker="VEA", weight=0.3, value=30_000),
             ],
         )
     ]

@@ -38,6 +38,32 @@ WEIGHT_TOLERANCE = 1e-4
 DEFAULT_CACHE_DIR = Path.home() / ".hailmary" / "cache" / "statements"
 
 
+# Legacy Stashaway SID → Yahoo Ticker. Stashaway PDF deep-links carry only the
+# bare symbol (``/asset-details/flot/...``) with no exchange suffix — but the
+# fund Stashaway actually holds is the UCITS / .SI / .AS variant. This table
+# translates SIDs to Yahoo Tickers at parse time so the rest of the pipeline
+# can key by Yahoo Ticker uniformly. Keep in sync with `universe.py` keys.
+_SID_TO_TICKER: dict[str, str] = {
+    "A35": "A35.SI", "BB3M": "BB3M.L", "CCAU": "CCAU.L", "CEUU": "CEUU.AS",
+    "CLR": "CLR.SI", "CPXJ": "CPXJ.L", "CSPX": "CSPX.L", "CSUS": "CSUS.L",
+    "EXCH": "EXCH.AS", "FLOT": "FLOT.L", "G3B": "G3B.SI", "IBTU": "IBTU.L",
+    "ICHN": "ICHN.AS", "IDTL": "IDTL.L", "IDTM": "IDTM.L", "IEMB": "IEMB.L",
+    "IGLN": "IGLN.L", "IJPA": "IJPA.L", "IJPD": "IJPD.L", "IMBS": "IMBS.L",
+    "ISAC": "ISAC.L", "ISFD": "ISFD.L", "IUIS": "IUIS.L", "JEPQ": "JEPQ.L",
+    "JINAASH": "0P0001I87K.SI", "JPEMDSG": "0P0001RG8N.SI",
+    "JPGCBAS": "0P0001RG8Q.SI", "JPGHYHS": "0P0001SOG4.SI",
+    "JPMGASA": "0P0001DWBA.SI", "LNWELIA": "0P0001DB5Z.SI",
+    "MBH": "MBH.SI", "MMS": "MMS.SI", "OCBSGDM": "0P00006FZD.SI",
+    "QL3": "QL3.SI", "SASU": "SASU.L", "TIP5": "TIP5.L",
+}
+
+
+def _to_ticker(sid_or_ticker: str) -> str:
+    """Translate a Stashaway SID to its Yahoo Ticker. Passes through any
+    string that is already a ticker (suffix-bearing or universe-resident)."""
+    return _SID_TO_TICKER.get(sid_or_ticker, sid_or_ticker)
+
+
 # ---------------------------------------------------------------------------
 # Errors & dataclasses
 # ---------------------------------------------------------------------------
@@ -66,9 +92,15 @@ class StatementParseError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class ParsedHolding:
-    """One row of a parsed holdings table."""
+    """One row of a parsed holdings table.
 
-    stashaway_id: str
+    ``ticker`` is the Yahoo Finance ticker — the PDF parser translates
+    Stashaway's bare-symbol IDs (e.g. ``FLOT`` → ``FLOT.L``) via
+    :data:`_SID_TO_TICKER` before constructing this dataclass, so callers
+    can always look up ``ticker`` directly against ``STASHAWAY_UNIVERSE``.
+    """
+
+    ticker: str
     weight: float
     value: float
 
@@ -149,7 +181,7 @@ class StatementCache:
             sub = df[df["portfolio"] == header["name"]]
             holdings = [
                 ParsedHolding(
-                    stashaway_id=row.stashaway_id,
+                    ticker=row.ticker,
                     weight=float(row.weight),
                     value=float(row.value),
                 )
@@ -176,7 +208,7 @@ class StatementCache:
             for p in portfolios
             for h in p.holdings
         ]
-        df = pd.DataFrame(rows, columns=["portfolio", "stashaway_id", "weight", "value"])
+        df = pd.DataFrame(rows, columns=["portfolio", "ticker", "weight", "value"])
         df.to_parquet(parquet)
         meta.write_text(
             json.dumps(
@@ -508,14 +540,14 @@ def _normalise_weights(
     if denom <= 0:
         return holdings
     rescaled = [
-        ParsedHolding(stashaway_id=h.stashaway_id, weight=h.value / denom, value=h.value)
+        ParsedHolding(ticker=h.ticker, weight=h.value / denom, value=h.value)
         for h in holdings
     ]
     drift = 1.0 - sum(h.weight for h in rescaled)
     if rescaled and abs(drift) > 1e-12:
         last = rescaled[-1]
         rescaled[-1] = ParsedHolding(
-            stashaway_id=last.stashaway_id,
+            ticker=last.ticker,
             weight=last.weight + drift,
             value=last.value,
         )
@@ -559,7 +591,7 @@ def _parse_holdings_lines(
             value = _last_money_in(stripped) or 0.0
             cash_value += value
             holdings.append(
-                ParsedHolding(stashaway_id=f"CASH_{cash_ccy}", weight=0.0, value=value)
+                ParsedHolding(ticker=f"CASH_{cash_ccy}", weight=0.0, value=value)
             )
             i += 1
             continue
@@ -598,7 +630,9 @@ def _parse_holdings_lines(
             i += consumed
             continue
 
-        holdings.append(ParsedHolding(stashaway_id=ticker, weight=0.0, value=value))
+        holdings.append(
+            ParsedHolding(ticker=_to_ticker(ticker), weight=0.0, value=value)
+        )
         i += consumed
 
     return holdings, total_value
@@ -654,12 +688,16 @@ def load_holdings_from_json(path: Path | str) -> list[ParsedPortfolio]:
               "name": "Custom — Defensive",
               "total_value": 123456.78,
               "holdings": [
-                {"stashaway_id": "VTI", "weight": 0.40, "value": 49382.71},
-                {"stashaway_id": "BND", "weight": 0.60, "value": 74074.07}
+                {"ticker": "VTI", "weight": 0.40, "value": 49382.71},
+                {"ticker": "BND", "weight": 0.60, "value": 74074.07}
               ]
             }
           ]
         }
+
+    The legacy ``stashaway_id`` key (containing Stashaway's bare-symbol IDs
+    like ``FLOT``, ``BB3M``) is still accepted for back-compat and gets
+    translated to a Yahoo Ticker via :data:`_SID_TO_TICKER`.
     """
     p = Path(path)
     if not p.exists():
@@ -681,7 +719,7 @@ def load_holdings_from_json(path: Path | str) -> list[ParsedPortfolio]:
         try:
             holdings = [
                 ParsedHolding(
-                    stashaway_id=h["stashaway_id"],
+                    ticker=_to_ticker(h.get("ticker") or h["stashaway_id"]),
                     weight=float(h["weight"]),
                     value=float(h.get("value", 0.0)),
                 )

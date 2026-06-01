@@ -1,12 +1,16 @@
-"""Stashaway asset universe → tradeable-ticker map.
+"""Stashaway asset universe — keyed by Yahoo Ticker.
 
-Each entry maps the **identifier as it appears in a Stashaway statement** to a
-ticker resolvable by the existing ``hailmary.data`` provider layer, plus
-asset-class / region / sector metadata used by the diagnostic engine.
+Each entry maps a **Yahoo Finance ticker** (with exchange suffix where it
+matters: `.L`, `.SI`, `.AS`) to asset-class / region / sector metadata used
+by the diagnostic engine. The Yahoo Ticker is the canonical identifier
+throughout the allocation pipeline — Stashaway's bare-symbol IDs (e.g.
+``FLOT``, ``BB3M``, ``CSPX``) are ambiguous about exchange, so the legacy
+Stashaway-PDF parser in ``statements.py`` translates them via its own
+``_SID_TO_TICKER`` table before constructing ``ParsedHolding`` objects.
 
-The map starts deliberately small — it is seeded incrementally as new tickers
-are surfaced by the parser. Phase 1B (universe-gap analysis) will require
-enumerating Stashaway's full offering; that work is out of scope here.
+Holdings sheet (``data/holding.xlsx``) is the user-maintained source of
+truth — its ``Yahoo Ticker`` column matches these keys directly. No
+translation needed for sheet-driven loads.
 """
 
 from __future__ import annotations
@@ -34,12 +38,12 @@ class AssetMetadata:
 
 
 class UnknownAssetError(KeyError):
-    """Raised when a Stashaway asset identifier is not present in the universe map."""
+    """Raised when a ticker is not present in the universe map."""
 
-    def __init__(self, stashaway_id: str, source: str | None = None) -> None:
-        self.stashaway_id = stashaway_id
+    def __init__(self, ticker: str, source: str | None = None) -> None:
+        self.ticker = ticker
         self.source = source
-        msg = f"Unknown Stashaway asset {stashaway_id!r}"
+        msg = f"Unknown asset ticker {ticker!r}"
         if source:
             msg += f" (source: {source})"
         super().__init__(msg)
@@ -95,14 +99,14 @@ STASHAWAY_UNIVERSE: dict[str, AssetMetadata] = {
     # used in user's AI Power Stack (35%).
     "GRID": _m("GRID", "Equity", "US", "Smart Grid Infrastructure"),
     # ----------------------------------------------------------------- US-listed bonds & cash-equivalent
-    "BB3M": _m("BB3M", "Bond", "US", "Treasury 0-3M"),
-    # iShares Floating Rate Bond ETF — used in the user's Global Floating
-    # Rate USD sleeve (USD short-duration corp bond, resets quarterly).
-    "FLOT": _m("FLOT", "Bond", "US", "Floating Rate"),
+    # iShares $ Floating Rate Bond UCITS ETF — Stashaway uses the UCITS
+    # variant (London, USD) for SG investors, same pattern as JEPQ → JEPQ.L
+    # and CSPX → CSPX.L. User verified 2026-06-01 ($5.02 @ 2026-05-29).
+    "FLOT.L": _m("FLOT.L", "Bond", "UCITS", "Floating Rate"),
     # ----------------------------------------------------------------- US-listed thematic / income
     # Stashaway uses the UCITS variant for SG investors (15% withholding via
     # Ireland-US treaty vs 30% on the US-listed JEPQ). User confirmed 2026-05.
-    "JEPQ": _m("JEPQ.L", "Equity", "US", "Nasdaq Covered Call (proxy: JEPQ.L UCITS)"),
+    "JEPQ.L": _m("JEPQ.L", "Equity", "US", "Nasdaq Covered Call (proxy: JEPQ.L UCITS)"),
     # ----------------------------------------------------------------- US-listed alts
     "GLDM": _m("GLDM", "Commodity", "Global", "Gold"),
     # Real Fidelity spot-crypto ETFs Stashaway actually holds. Earlier we used
@@ -113,48 +117,48 @@ STASHAWAY_UNIVERSE: dict[str, AssetMetadata] = {
     "FBTC": _m("FBTC", "Crypto", "Global", "Bitcoin"),
     "FETH": _m("FETH", "Crypto", "Global", "Ethereum"),
     # ----------------------------------------------------------------- LSE-listed UCITS ETFs (BlackRock sleeve)
-    "ISAC": _m("ISAC.L", "Equity", "Global", "Broad Market"),
-    "CSUS": _m("CSUS.L", "Equity", "US", "Broad Market"),
-    "CSPX": _m("CSPX.L", "Equity", "US", "Broad Market"),
-    "SASU": _m("SASU.L", "Equity", "US", "ESG Screened"),
-    "IUIS": _m("IUIS.L", "Equity", "US", "Industrials"),
-    "IJPA": _m("IJPA.L", "Equity", "Japan", "Broad Market"),
-    "IJPD": _m("IJPD.L", "Equity", "Japan", "Hedged"),
-    "ISFD": _m("ISFD.L", "Equity", "UK", "Broad Market"),
-    "CCAU": _m("CCAU.L", "Equity", "Canada", "Broad Market"),
+    "ISAC.L": _m("ISAC.L", "Equity", "Global", "Broad Market"),
+    "CSUS.L": _m("CSUS.L", "Equity", "US", "Broad Market"),
+    "CSPX.L": _m("CSPX.L", "Equity", "US", "Broad Market"),
+    "SASU.L": _m("SASU.L", "Equity", "US", "ESG Screened"),
+    "IUIS.L": _m("IUIS.L", "Equity", "US", "Industrials"),
+    "IJPA.L": _m("IJPA.L", "Equity", "Japan", "Broad Market"),
+    "IJPD.L": _m("IJPD.L", "Equity", "Japan", "Hedged"),
+    "ISFD.L": _m("ISFD.L", "Equity", "UK", "Broad Market"),
+    "CCAU.L": _m("CCAU.L", "Equity", "Canada", "Broad Market"),
     # iShares Core MSCI EMU UCITS ETF EUR (Acc), USD-quoted Amsterdam listing
     # (ISIN IE00BKBF6616). Same fund as CEU1.L/IEMU.L but Amsterdam is the
     # USD-quoted primary on Yahoo — matches the EXCH.AS convention.
-    "CEUU": _m("CEUU.AS", "Equity", "Eurozone", "Broad Market"),
-    "CPXJ": _m("CPXJ.L", "Equity", "Pacific ex-Japan", "Broad Market"),
+    "CEUU.AS": _m("CEUU.AS", "Equity", "Eurozone", "Broad Market"),
+    "CPXJ.L": _m("CPXJ.L", "Equity", "Pacific ex-Japan", "Broad Market"),
     # iShares MSCI EM ex-China UCITS ETF USD Acc — Amsterdam listing is the
     # USD-quoted share class (matches ISAC.L/CSPX.L/CCAU.L convention). The
     # LSE listing EXCS.L is GBP-quoted and would inject GBP/USD noise.
-    "EXCH": _m("EXCH.AS", "Equity", "Emerging Markets ex-China", "Broad Market"),
+    "EXCH.AS": _m("EXCH.AS", "Equity", "Emerging Markets ex-China", "Broad Market"),
     # iShares MSCI China UCITS ETF — Amsterdam USD-quoted listing (matches the
     # EXCH.AS / CEUU.AS Amsterdam convention; same fund Stashaway holds via the
     # ICHN code). Yahoo longName: "iShares MSCI China UCITS ETF", currency USD.
-    "ICHN": _m("ICHN.AS", "Equity", "China", "Broad Market UCITS USD"),
-    "IDTM": _m("IDTM.L", "Bond", "US", "Treasury 7-10Y"),
-    "IDTL": _m("IDTL.L", "Bond", "US", "Treasury 20+Y"),
-    "IBTU": _m("IBTU.L", "Bond", "US", "Treasury 0-1Y"),
-    "TIP5": _m("TIP5.L", "Bond", "US", "TIPS 0-5Y"),
-    "IMBS": _m("IMBS.L", "Bond", "US", "MBS"),
-    "IEMB": _m("IEMB.L", "Bond", "Emerging Markets", "USD Sovereign"),
-    "IGLN": _m("IGLN.L", "Commodity", "Global", "Gold"),
+    "ICHN.AS": _m("ICHN.AS", "Equity", "China", "Broad Market UCITS USD"),
+    "IDTM.L": _m("IDTM.L", "Bond", "US", "Treasury 7-10Y"),
+    "IDTL.L": _m("IDTL.L", "Bond", "US", "Treasury 20+Y"),
+    "IBTU.L": _m("IBTU.L", "Bond", "US", "Treasury 0-1Y"),
+    "TIP5.L": _m("TIP5.L", "Bond", "US", "TIPS 0-5Y"),
+    "IMBS.L": _m("IMBS.L", "Bond", "US", "MBS"),
+    "IEMB.L": _m("IEMB.L", "Bond", "Emerging Markets", "USD Sovereign"),
+    "IGLN.L": _m("IGLN.L", "Commodity", "Global", "Gold"),
     # ----------------------------------------------------------------- SGX-listed (Singapore Investing / SG ETF)
-    "A35": _m("A35.SI", "Bond", "Singapore", "Aggregate"),
+    "A35.SI": _m("A35.SI", "Bond", "Singapore", "Aggregate"),
     # MBH.SI is the Amova SGD Investment Grade Corporate Bond Index ETF (not Government).
-    "MBH": _m("MBH.SI", "Bond", "Singapore", "Investment Grade Corporate"),
-    "G3B": _m("G3B.SI", "Equity", "Singapore", "Broad Market"),
+    "MBH.SI": _m("MBH.SI", "Bond", "Singapore", "Investment Grade Corporate"),
+    "G3B.SI": _m("G3B.SI", "Equity", "Singapore", "Broad Market"),
     # CLR.SI is Lion-Phillip S-REIT ETF — Singapore REITs, not pan-Asia equity.
-    "CLR": _m("CLR.SI", "Equity", "Singapore", "REITs"),
+    "CLR.SI": _m("CLR.SI", "Equity", "Singapore", "REITs"),
     # MMS.SI is Phillip SGD Money Market ETF — cash-equivalent, not broad equity.
-    "MMS": _m("MMS.SI", "Cash", "Singapore", "Money Market"),
+    "MMS.SI": _m("MMS.SI", "Cash", "Singapore", "Money Market"),
     # QL3.SI = iShares USD Asia High Yield Bond ETF (SGD share class).
     # Stashaway's xlsx mislabels this as "Singapore Equities" but the underlying
     # is actually Asia HY USD bonds — confirmed via Yahoo longName.
-    "QL3": _m("QL3.SI", "Bond", "Asia ex-Japan", "High Yield USD"),
+    "QL3.SI": _m("QL3.SI", "Bond", "Asia ex-Japan", "High Yield USD"),
     # ----------------------------------------------------------------- ISIN-verified non-trivial mappings (2026-05-30, user-confirmed)
     # Each ticker below was confirmed via Yahoo `Search(ISIN)` returning the
     # listed ticker AND by cross-checking Yahoo's `longName` against the fund
@@ -174,41 +178,40 @@ STASHAWAY_UNIVERSE: dict[str, AssetMetadata] = {
     # (no ISIN given)   OCBSGDM       0P0001DB5Z.SI       LionGlobal SGD Enhanced Liquidity (LSE2; proxy for Guitsa 30/70 blend)
     # Sector field is intentionally short — it labels the exposure pie-chart
     # bucket. Fund full names + ISINs live in the comment block above.
-    "JINAASH": _m("0P0001I87K.SI", "Bond", "Global", "Multi-Asset Income"),
-    "JPMGASA": _m("0P0001DWBA.SI", "Bond", "Global", "Unconstrained / Multi-Sector"),
-    "JPEMDSG": _m("0P0001RG8N.SI", "Bond", "Emerging Markets", "Hard-Currency Sovereign"),
-    "JPGCBAS": _m("0P0001RG8Q.SI", "Bond", "Global", "Investment Grade Corporate"),
-    "JPGHYHS": _m("0P0001SOG4.SI", "Bond", "Global", "High Yield"),
+    "0P0001I87K.SI": _m("0P0001I87K.SI", "Bond", "Global", "Multi-Asset Income"),
+    "0P0001DWBA.SI": _m("0P0001DWBA.SI", "Bond", "Global", "Unconstrained / Multi-Sector"),
+    "0P0001RG8N.SI": _m("0P0001RG8N.SI", "Bond", "Emerging Markets", "Hard-Currency Sovereign"),
+    "0P0001RG8Q.SI": _m("0P0001RG8Q.SI", "Bond", "Global", "Investment Grade Corporate"),
+    "0P0001SOG4.SI": _m("0P0001SOG4.SI", "Bond", "Global", "High Yield"),
     # Stashaway's "BB3M" is the LSE-listed USD share class. ISIN IE00BMD8KM66
     # resolves on Yahoo to BBM3.L (GBP-quoted); BB3M.L is the USD-quoted listing
     # of the same fund — match the trading currency in your USD-base statement.
-    "BB3M": _m("BB3M.L", "Cash", "US", "Treasury 0-3M"),
+    "BB3M.L": _m("BB3M.L", "Cash", "US", "Treasury 0-3M"),
     # LionGlobal SGD funds inside Guitsa / Simple SGD. Stashaway's 70/30 blend
     # per stashaway.sg/simple-var3 maps to the two underlying funds — split per
     # Stashaway ID so each row in user-link file ties to the right NAV. Both
     # funds annualised ~identically (~2.33% / ~1.89% over 5y) so metric impact
     # is negligible vs the prior collapsed mapping.
-    "LNWELIA": _m("0P0001DB5Z.SI", "Cash", "Singapore", "LionGlobal SGD Enhanced Liquidity A"),
+    "0P0001DB5Z.SI": _m("0P0001DB5Z.SI", "Cash", "Singapore", "LionGlobal SGD Enhanced Liquidity A"),
     # OCBSGDM (the 30% MMF leg) is wired to the real LionGlobal SGD MMF.
-    "OCBSGDM": _m("0P00006FZD.SI", "Cash", "Singapore", "LionGlobal SGD Money Market A"),
+    "0P00006FZD.SI": _m("0P00006FZD.SI", "Cash", "Singapore", "LionGlobal SGD Money Market A"),
 }
-"""Stashaway identifier → AssetMetadata.
+"""Yahoo Ticker → AssetMetadata.
 
-Seeded from the user's 2026-04 statement (55 tickers, 15 portfolios). Some
-LSE-listed UCITS ETFs and SGX-listed funds carry exchange suffixes (`.L`,
-`.SI`) on Yahoo Finance. Stashaway-only managed funds without public tickers
-are mapped to the closest tradeable proxy with the proxy noted in the
-``sector`` field.
+Maintained against the user's Holdings sheet (`data/holding.xlsx`). LSE-listed
+UCITS ETFs and SGX-listed funds carry exchange suffixes (`.L`, `.SI`, `.AS`)
+on Yahoo Finance; Stashaway-only managed funds without public tickers use
+their `0P0...` Yahoo identifiers (e.g. JPM SGD-hedged share classes).
 """
 
 
-def resolve(stashaway_id: str, *, source: str | None = None) -> AssetMetadata:
-    """Look up *stashaway_id* in :data:`STASHAWAY_UNIVERSE`.
+def resolve(ticker: str, *, source: str | None = None) -> AssetMetadata:
+    """Look up *ticker* in :data:`STASHAWAY_UNIVERSE`.
 
     Raises :class:`UnknownAssetError` (with the source portfolio name if given)
-    when the identifier is missing, rather than silently dropping the holding.
+    when the ticker is missing, rather than silently dropping the holding.
     """
     try:
-        return STASHAWAY_UNIVERSE[stashaway_id]
+        return STASHAWAY_UNIVERSE[ticker]
     except KeyError as exc:
-        raise UnknownAssetError(stashaway_id, source=source) from exc
+        raise UnknownAssetError(ticker, source=source) from exc

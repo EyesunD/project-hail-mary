@@ -38,7 +38,7 @@ def anonymise(input_path: Path, output_path: Path) -> None:
                 "total_value": round(p.total_value * SCALE, 2),
                 "holdings": [
                     {
-                        "stashaway_id": h.stashaway_id,
+                        "ticker": h.ticker,
                         "weight": round(h.weight, 6),
                         "value": round(h.value * SCALE, 2),
                     }

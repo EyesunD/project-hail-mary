@@ -34,7 +34,7 @@ def _portfolio(
 ) -> Portfolio:
     holdings = [
         Holding(
-            stashaway_id=sid,
+            ticker=sid,
             weight=w,
             value=w * total_value,
             metadata=STASHAWAY_UNIVERSE[sid],
@@ -122,20 +122,20 @@ def test_set_weights_happy_path(seeded_universe: object) -> None:
     book = [_portfolio("A", {"VTI": 0.6, "BND": 0.4})]
     out = set_weights(book, "A", {"VTI": 0.3, "BND": 0.7})
     new_a = out[0]
-    weights = {h.stashaway_id: h.weight for h in new_a.holdings}
+    weights = {h.ticker: h.weight for h in new_a.holdings}
     assert weights == {"VTI": 0.3, "BND": 0.7}
     # Values rebuilt
-    values = {h.stashaway_id: h.value for h in new_a.holdings}
+    values = {h.ticker: h.value for h in new_a.holdings}
     assert values == {"VTI": 30_000.0, "BND": 70_000.0}
     # Input untouched
-    orig_weights = {h.stashaway_id: h.weight for h in book[0].holdings}
+    orig_weights = {h.ticker: h.weight for h in book[0].holdings}
     assert orig_weights == {"VTI": 0.6, "BND": 0.4}
 
 
 def test_set_weights_zero_out_holding(seeded_universe: object) -> None:
     book = [_portfolio("A", {"VTI": 0.5, "BND": 0.5})]
     out = set_weights(book, "A", {"VTI": 1.0, "BND": 0.0})
-    weights = {h.stashaway_id: h.weight for h in out[0].holdings}
+    weights = {h.ticker: h.weight for h in out[0].holdings}
     assert weights == {"VTI": 1.0, "BND": 0.0}
 
 
@@ -147,7 +147,7 @@ def test_set_weights_unknown_portfolio_raises(seeded_universe: object) -> None:
 
 def test_set_weights_unknown_ticker_raises(seeded_universe: object) -> None:
     book = [_portfolio("A", {"VTI": 0.6, "BND": 0.4})]
-    with pytest.raises(ScenarioEditError, match="Unknown stashaway_id"):
+    with pytest.raises(ScenarioEditError, match="Unknown ticker"):
         set_weights(book, "A", {"VTI": 0.5, "GLD": 0.5})
 
 
@@ -178,7 +178,7 @@ def test_rebalance_into_happy_path(seeded_universe: object) -> None:
     eq = out[0]
     assert eq.total_value == 250_000
     # Holdings unchanged structurally — just larger value
-    assert {h.stashaway_id for h in eq.holdings} == {"BND"}
+    assert {h.ticker for h in eq.holdings} == {"BND"}
     assert eq.holdings[0].value == 250_000
 
 
@@ -221,7 +221,7 @@ def test_merge_into_happy_path_new_name(seeded_universe: object) -> None:
     merged = next(p for p in out if p.name == "Custom Sleeve")
     assert merged.total_value == 30_000
     # Value-weighted union: Energy contributed 10K VTI, Utilities 20K BND
-    weights = {h.stashaway_id: h.weight for h in merged.holdings}
+    weights = {h.ticker: h.weight for h in merged.holdings}
     assert weights["VTI"] == pytest.approx(10_000 / 30_000)
     assert weights["BND"] == pytest.approx(20_000 / 30_000)
 
@@ -291,7 +291,7 @@ def test_helpers_do_not_mutate_input(seeded_universe: object) -> None:
     snapshot = {
         p.name: {
             "total_value": p.total_value,
-            "weights": tuple((h.stashaway_id, h.weight) for h in p.holdings),
+            "weights": tuple((h.ticker, h.weight) for h in p.holdings),
             "roles": frozenset(p.roles),
         }
         for p in book
@@ -303,7 +303,7 @@ def test_helpers_do_not_mutate_input(seeded_universe: object) -> None:
     for p in book:
         assert p.total_value == snapshot[p.name]["total_value"]
         assert (
-            tuple((h.stashaway_id, h.weight) for h in p.holdings)
+            tuple((h.ticker, h.weight) for h in p.holdings)
             == snapshot[p.name]["weights"]
         )
         assert frozenset(p.roles) == snapshot[p.name]["roles"]

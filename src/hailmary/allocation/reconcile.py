@@ -47,7 +47,7 @@ class Deposit:
 
 
 def load_deposits(
-    links_path: Path = Path("data/holding links.xlsx"),
+    links_path: Path = Path("data/holding.xlsx"),
     *,
     since: date | None = None,
 ) -> list[Deposit]:
@@ -102,9 +102,9 @@ _APP_DELTA_RE = re.compile(r"([+-]?\$[\d,]+\.\d{2})")
 
 
 def load_app_values_all_snapshots(
-    links_path: Path = Path("data/holding links.xlsx"),
+    links_path: Path = Path("data/holding.xlsx"),
 ) -> dict[date, dict[str, float]]:
-    """Read every app-value snapshot from the Portfolio SGD Values sheet.
+    """Read every app-value snapshot from the PortfolioValueSGD sheet.
 
     Returns ``{snapshot_date: {portfolio_name: sgd_value}}``. When two columns
     share the same date, values are merged (rightmost wins for ties).
@@ -119,9 +119,9 @@ def load_app_values_all_snapshots(
         return {}
     try:
         wb = openpyxl.load_workbook(links_path, data_only=False)
-        if "Portfolio SGD Values" not in wb.sheetnames:
+        if "PortfolioValueSGD" not in wb.sheetnames:
             return {}
-        ws = wb["Portfolio SGD Values"]
+        ws = wb["PortfolioValueSGD"]
         HEADER_ROW = 6
         name_col = None
         date_cols: list[tuple[date, int]] = []
@@ -152,13 +152,13 @@ def load_app_values_all_snapshots(
                     continue
         return out
     except Exception as exc:
-        warnings.warn(f"Could not read Portfolio SGD Values sheet: {exc}", stacklevel=2)
+        warnings.warn(f"Could not read PortfolioValueSGD sheet: {exc}", stacklevel=2)
         return {}
 
 
 def load_app_values_at_date(
     target_date: date,
-    links_path: Path = Path("data/holding links.xlsx"),
+    links_path: Path = Path("data/holding.xlsx"),
 ) -> tuple[dict[str, float], date | None]:
     """Get the snapshot whose date is CLOSEST to ``target_date``.
 
@@ -175,7 +175,7 @@ def load_app_values_at_date(
 
 
 def load_app_values_from_sheet(
-    links_path: Path = Path("data/holding links.xlsx"),
+    links_path: Path = Path("data/holding.xlsx"),
 ) -> tuple[dict[str, float], date | None]:
     """Read the LATEST app-value snapshot. Kept for backward compatibility;
     new code should prefer :func:`load_app_values_at_date` or
@@ -190,11 +190,11 @@ def load_app_values_from_sheet(
 def load_app_values(
     pdf_dir: Path = Path("data"),
     pattern: str = "current values *.pdf",
-    links_path: Path = Path("data/holding links.xlsx"),
+    links_path: Path = Path("data/holding.xlsx"),
 ) -> tuple[dict[str, float], date | None]:
     """Resolve app SGD values per sleeve.
 
-    Primary source: ``Portfolio SGD Values`` sheet in holding-links file
+    Primary source: ``PortfolioValueSGD`` sheet in holding-links file
     (user-maintained, time-series of snapshots). Fallback: parse the latest
     ``current values YYYY-MM-DD.pdf`` in ``data/``.
     """
@@ -312,7 +312,7 @@ def _synthesize_new_sleeves(
 ) -> tuple[list[Portfolio], list[Deposit]]:
     """Synthesize Portfolio objects for sleeves added AFTER the statement date.
 
-    A sleeve qualifies when it appears in the ``Portfolio SGD Values`` sheet
+    A sleeve qualifies when it appears in the ``PortfolioValueSGD`` sheet
     (``app_values_end``) but isn't in the parsed statement. We treat the first
     deposit to that sleeve as a synthetic statement event:
 
@@ -375,7 +375,7 @@ def _synthesize_new_sleeves(
                 continue
             holdings.append(
                 Holding(
-                    stashaway_id=sid,
+                    ticker=sid,
                     weight=w,
                     value=w * seed.amount,
                     metadata=meta,
@@ -409,7 +409,7 @@ def _synthesize_new_sleeves(
         if abs(wsum - 1.0) > 1e-4:
             holdings = [
                 Holding(
-                    stashaway_id=h.stashaway_id,
+                    ticker=h.ticker,
                     weight=h.weight / wsum,
                     value=(h.weight / wsum) * seed.amount,
                     metadata=h.metadata,
@@ -485,7 +485,7 @@ def build_reconcile(
     """Per-sleeve reconciliation.
 
     Performance lens: ``Δ = app_end - app_start - deposits`` — what really
-    happened to your money, sourced entirely from the Portfolio SGD Values
+    happened to your money, sourced entirely from the PortfolioValueSGD
     sheet (start = snapshot closest to stmt_date, end = closest to today).
 
     Validation lens: ``gap = our_model + deposits - app_end`` — does our
@@ -693,11 +693,11 @@ def _methodology_html() -> str:
     return """
 <p><strong>Architecture (signed off 2026-05-31):</strong> reconcile.html answers ONE
 question — "does our model match the app?". App values (start AND end) come
-from the user-maintained <code>Portfolio SGD Values</code> sheet in
-<code>holding links.xlsx</code>; our model is the validation column.</p>
+from the user-maintained <code>PortfolioValueSGD</code> sheet in
+<code>holding.xlsx</code>; our model is the validation column.</p>
 <ul>
   <li><strong>App (start) / App (end)</strong>: both sourced from the
-      <code>Portfolio SGD Values</code> sheet — start = snapshot closest to
+      <code>PortfolioValueSGD</code> sheet — start = snapshot closest to
       the statement date; end = snapshot closest to today. These are the
       "what really happened" numbers, untouched by our reconstruction.</li>
   <li><strong>Δ Perf</strong>: <code>app_end - app_start - deposits</code>.
@@ -723,7 +723,7 @@ from the user-maintained <code>Portfolio SGD Values</code> sheet in
       zero. Real cash positions use real Yahoo tickers (LionGlobal SGD MMF +
       Enhanced Liquidity, OCBC SGD MMF, BB3M.L) that flow through the
       buy-and-hold path with forward-accrual.</li>
-  <li><strong>Deposits</strong> summed from <code>holding links.xlsx</code>'s
+  <li><strong>Deposits</strong> summed from <code>holding.xlsx</code>'s
       Deposits sheet (rows with date &gt; stmt date). Subtracted from Δ Perf
       and added into our-model+deposits for the gap calculation.</li>
   <li><strong>Drill-down vs sleeve total</strong>: per-holding values in the
@@ -751,7 +751,7 @@ def render_reconcile_report(
     """Render the reconcile HTML report.
 
     Both the start-of-period and end-of-period sleeve values come from the
-    user-maintained ``Portfolio SGD Values`` sheet in ``data/holding links.xlsx``.
+    user-maintained ``PortfolioValueSGD`` sheet in ``data/holding.xlsx``.
     The start snapshot is the column closest to the latest statement date; the
     end snapshot is the column closest to ``end`` (or today). Deposits and our
     piecewise model are used to compute the performance delta and the model

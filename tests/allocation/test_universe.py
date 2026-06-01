@@ -22,7 +22,7 @@ def test_resolve_known_asset(seeded_universe: object) -> None:
 def test_resolve_unknown_asset_raises(seeded_universe: object) -> None:
     with pytest.raises(UnknownAssetError) as excinfo:
         resolve("FOO_NEVER_HEARD_OF", source="Custom X")
-    assert excinfo.value.stashaway_id == "FOO_NEVER_HEARD_OF"
+    assert excinfo.value.ticker == "FOO_NEVER_HEARD_OF"
     assert excinfo.value.source == "Custom X"
     assert "Custom X" in str(excinfo.value)
 

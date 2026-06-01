@@ -484,8 +484,8 @@ def _build_holding_nav_panel_sgd(
         target_series = _resolve_target_series(
             target_weights_by_portfolio.get(p.name) if target_weights_by_portfolio else None
         )
-        holdings_by_sid = {h.stashaway_id: h for h in p.holdings}
-        stmt_weights = {h.stashaway_id: h.weight for h in p.holdings}
+        holdings_by_sid = {h.ticker: h for h in p.holdings}
+        stmt_weights = {h.ticker: h.weight for h in p.holdings}
         segments = _piecewise_segments(
             p.statement_date, end_date, target_series, stmt_weights
         )
@@ -1043,7 +1043,7 @@ def holdings_reconciliation(
     ``ticker, label, weight, weight_basis, stmt_value, stmt_price, today_price,
     return, today_value, delta``. All values in the portfolio's native currency.
 
-    ``target_weights`` (optional): ``{stashaway_id: target_weight}`` from
+    ``target_weights`` (optional): ``{ticker: target_weight}`` from
     ``load_target_weights``. When provided and a holding has a target weight,
     that weight is used instead of the statement-date actual weight — closer
     to Stashaway's steady-state allocation (they continuously rebalance toward
@@ -1115,7 +1115,7 @@ def holdings_reconciliation(
         # Use target weight when available; else fall back to stmt-date actual.
         # Targets reflect Stashaway's steady-state rebalancing anchor and yield
         # closer reconciliation to the app for actively-rebalanced sleeves.
-        target_w = targets.get(h.stashaway_id)
+        target_w = targets.get(h.ticker)
         if target_w is not None:
             weight_used = target_w
             weight_basis = "target"
@@ -1256,8 +1256,8 @@ def _piecewise_compound_native(
     Returns ``(today_native, basis_per_segment)`` where the second item is the
     list of segment bases ("target" or "statement") — useful for diagnostics.
     """
-    holdings_by_sid = {h.stashaway_id: h for h in p.holdings}
-    stmt_weights = {h.stashaway_id: h.weight for h in p.holdings}
+    holdings_by_sid = {h.ticker: h for h in p.holdings}
+    stmt_weights = {h.ticker: h.weight for h in p.holdings}
     segments = _piecewise_segments(
         p.statement_date, end_date, target_series, stmt_weights
     )
@@ -1338,14 +1338,14 @@ def _validate_target_coverage(
             targets = _target_weights_at(entry, as_of or date.today())
         if targets is None:
             continue
-        holding_ids = {h.stashaway_id for h in p.holdings}
+        holding_ids = {h.ticker for h in p.holdings}
         missing = holding_ids - set(targets)
         if missing:
             warnings.warn(
                 f"Target weights for {p.name!r} (as of {as_of or 'latest'}) miss "
                 f"holdings {sorted(missing)}; falling back to statement-date "
                 f"weights for this portfolio. Add a dated Target % column "
-                f"covering these in data/holding links.xlsx.",
+                f"covering these in data/holding.xlsx.",
                 stacklevel=2,
             )
             continue
@@ -2394,11 +2394,11 @@ _TARGET_COL_RE = re.compile(r"^\s*Target\s*%\s*(\d{4}-\d{2}-\d{2})?\s*$", re.IGN
 
 
 def load_target_weights(
-    links_path: Path = Path("data/holding links.xlsx"),
+    links_path: Path = Path("data/holding.xlsx"),
 ) -> dict[str, list[tuple[date, dict[str, float]]]]:
     """Read user-maintained target-weight time series from the holding-links Excel.
 
-    Returns ``{portfolio_name: [(effective_date, {stashaway_id: weight}), ...]}``
+    Returns ``{portfolio_name: [(effective_date, {ticker: weight}), ...]}``
     sorted **descending** by effective date (most recent first). Each
     ``Target %`` column in the source becomes one entry:
 
@@ -2421,9 +2421,9 @@ def load_target_weights(
     snapshots: dict[date, dict[str, dict[str, float]]] = {}
     try:
         wb = openpyxl.load_workbook(links_path, data_only=False)
-        if "Portfolios" not in wb.sheetnames:
+        if "Holdings" not in wb.sheetnames:
             return {}
-        ws = wb["Portfolios"]
+        ws = wb["Holdings"]
         HEADER_ROW = 7
         hdr_to_col: dict[str, int] = {}
         target_cols: list[tuple[date, int]] = []
@@ -2449,43 +2449,31 @@ def load_target_weights(
         port_col = hdr_to_col.get("Port", 6)
         link_col = hdr_to_col.get("Link", 10)
         yt_col = hdr_to_col.get("Yahoo Ticker")
-        # Reverse-lookup: Yahoo ticker → Stashaway ID for the fallback path
-        # (used when a row's Link cell lacks a hyperlink, e.g. user-added rows
-        # for re-introduced or historical holdings).
-        ticker_to_sid: dict[str, str] = {}
-        for sid, meta in UNIV.items():
-            ticker_to_sid.setdefault(meta.ticker, sid)
-            # Also accept the SID itself as a valid Yahoo Ticker entry
-            ticker_to_sid.setdefault(sid, sid)
 
         for eff_date, target_col in target_cols:
             for r in range(HEADER_ROW + 1, ws.max_row + 1):
                 port = ws.cell(row=r, column=port_col).value
-                link_cell = ws.cell(row=r, column=link_col)
                 tw = ws.cell(row=r, column=target_col).value
                 if port is None or tw is None:
                     continue
                 name = _PORTFOLIO_ALIASES.get(str(port), str(port))
-                url = link_cell.hyperlink.target if link_cell.hyperlink else ""
-                m = _HOLDING_LINK_RE.search(str(url))
-                if m:
-                    sid = m.group(1).upper()
-                    sid = cash_alias.get(sid, sid)
-                else:
-                    # Fallback to Yahoo Ticker column — handles rows added
-                    # manually (e.g. re-introduced FBTC/FETH historical
-                    # targets) where the user didn't copy a hyperlink.
-                    yt = ws.cell(row=r, column=yt_col).value if yt_col else None
-                    yt_str = str(yt).strip() if yt is not None else ""
-                    if not yt_str:
-                        continue
-                    sid = ticker_to_sid.get(yt_str)
-                    if sid is None:
-                        sid = ticker_to_sid.get(yt_str.upper())
-                    if sid is None:
-                        continue  # no resolution path — skip
+                # Yahoo Ticker is the canonical lookup key against UNIV.
+                ticker = ""
+                if yt_col is not None:
+                    v = ws.cell(row=r, column=yt_col).value
+                    ticker = str(v).strip() if v is not None else ""
+                if not ticker:
+                    # Cash row fallback — Stashaway uses USD/SGD as the SID
+                    # in cash-row deep-links; map to CASH_USD/CASH_SGD.
+                    link_cell = ws.cell(row=r, column=link_col)
+                    url = link_cell.hyperlink.target if link_cell.hyperlink else ""
+                    m = _HOLDING_LINK_RE.search(str(url))
+                    if m:
+                        ticker = cash_alias.get(m.group(1).upper(), "")
+                if not ticker or ticker not in UNIV:
+                    continue
                 snap = snapshots.setdefault(eff_date, {}).setdefault(name, {})
-                snap[sid] = snap.get(sid, 0.0) + float(tw)
+                snap[ticker] = snap.get(ticker, 0.0) + float(tw)
     except Exception:
         return {}
 
@@ -2530,7 +2518,7 @@ def _target_weights_at(
 
 def _portfolio_goal_links(
     portfolios: Sequence[Portfolio],
-    links_path: Path = Path("data/holding links.xlsx"),
+    links_path: Path = Path("data/holding.xlsx"),
 ) -> dict[str, str]:
     """Best-effort map of portfolio name → Stashaway app goal URL.
 
@@ -2549,9 +2537,9 @@ def _portfolio_goal_links(
     out: dict[str, str] = {}
     try:
         wb = openpyxl.load_workbook(links_path, data_only=False)
-        if "Portfolios" not in wb.sheetnames:
+        if "Holdings" not in wb.sheetnames:
             return {}
-        ws = wb["Portfolios"]
+        ws = wb["Holdings"]
         HEADER_ROW = 7
         hdr_to_col: dict[str, int] = {}
         for c in range(1, ws.max_column + 1):
@@ -2592,7 +2580,7 @@ def _holdings_drilldown_to_html(
     Uses native HTML <details>/<summary> for free collapse behaviour. One
     section per HOLDING-tagged portfolio, sorted by AUM desc. Portfolio names
     link to the Stashaway app goal page when discoverable from
-    ``data/holding links.xlsx``.
+    ``data/holding.xlsx``.
     """
     holdings_books = sorted(
         [p for p in portfolios if Role.HOLDING in p.roles],
@@ -2610,7 +2598,7 @@ def _holdings_drilldown_to_html(
         "and current value. Each table has a <strong>📋 Copy</strong> button that "
         "copies headers + rows + the Total row as tab-separated text — paste straight "
         "into Excel/Sheets. Portfolio names are linked to the Stashaway app where "
-        "discoverable from your <code>holding links.xlsx</code>.</p>"
+        "discoverable from your <code>holding.xlsx</code>.</p>"
         '<p class="footnote">Ticker badges: <strong>🟡synth</strong> = '
         "synthetic series (no real ticker — return modelled from a published "
         "yield, e.g. CASH_USD/CASH_SGD). <strong>🟠proxy</strong> = real "

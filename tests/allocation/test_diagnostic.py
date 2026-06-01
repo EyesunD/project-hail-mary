@@ -183,7 +183,7 @@ def test_render_html_report_strict_raises_on_dropped_portfolio(
         currency="USD",
         holdings=[
             Holding(
-                stashaway_id="MYSTERY",
+                ticker="MYSTERY",
                 weight=1.0,
                 value=100_000,
                 metadata=replace(STASHAWAY_UNIVERSE["VTI"], ticker="MYSTERY"),
@@ -212,7 +212,7 @@ def test_render_html_report_non_strict_warns_and_continues(
         currency="USD",
         holdings=[
             Holding(
-                stashaway_id="MYSTERY",
+                ticker="MYSTERY",
                 weight=1.0,
                 value=100_000,
                 metadata=replace(STASHAWAY_UNIVERSE["VTI"], ticker="MYSTERY"),

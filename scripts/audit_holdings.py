@@ -21,6 +21,7 @@ import yfinance as yf
 
 from hailmary.allocation.book_config import ROLES
 from hailmary.allocation.statements import parse_statement
+from hailmary.allocation.statements import _SID_TO_TICKER
 from hailmary.allocation.universe import STASHAWAY_UNIVERSE
 
 warnings.filterwarnings("ignore")
@@ -52,7 +53,7 @@ def extract_pdf_names() -> dict[str, str]:
                     if prev and not prev.startswith("$") and "$" not in prev.split()[-1]:
                         if any(k in prev for k in ("Fund", "ETF", "Bond", "Equity", "Hedged", "SGD", "USD", "Bills", "Cash", "Trust")):
                             name_chunk = (prev + " " + name_chunk).strip()
-            pdf_names[sid] = name_chunk
+            pdf_names[_SID_TO_TICKER.get(sid, sid)] = name_chunk
     return pdf_names
 
 
@@ -68,23 +69,22 @@ def yahoo_long_name(ticker: str) -> str:
 
 def main() -> None:
     parsed = parse_statement(PDF)
-    sids_in_book = sorted(
-        {h.stashaway_id for p in parsed for h in p.holdings if p.name in ROLES}
+    tickers_in_book = sorted(
+        {h.ticker for p in parsed for h in p.holdings if p.name in ROLES}
     )
     pdf_names = extract_pdf_names()
 
-    header_fmt = "{:12s} {:18s} {:50s} | {:60s}"
-    print(header_fmt.format("Stashaway ID", "Wired ticker", "Yahoo longName", "PDF fund name"))
-    print("-" * 145)
-    for sid in sids_in_book:
-        meta = STASHAWAY_UNIVERSE.get(sid)
-        pdf = pdf_names.get(sid, "?")
+    header_fmt = "{:18s} {:50s} | {:60s}"
+    print(header_fmt.format("Wired ticker", "Yahoo longName", "PDF fund name"))
+    print("-" * 132)
+    for ticker in tickers_in_book:
+        meta = STASHAWAY_UNIVERSE.get(ticker)
+        pdf = pdf_names.get(ticker, "?")
         if meta is None:
-            print(header_fmt.format(sid, "(unmapped)", "-", pdf[:60]))
+            print(header_fmt.format(ticker + " (unmapped)", "-", pdf[:60]))
             continue
-        ticker = meta.ticker
         ln = yahoo_long_name(ticker)
-        print(header_fmt.format(sid, ticker, ln[:50], pdf[:60]))
+        print(header_fmt.format(ticker, ln[:50], pdf[:60]))
 
 
 if __name__ == "__main__":

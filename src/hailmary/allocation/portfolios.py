@@ -35,7 +35,7 @@ class Role(StrEnum):
 class Holding:
     """One resolved holding inside a :class:`Portfolio`."""
 
-    stashaway_id: str
+    ticker: str
     weight: float
     value: float
     metadata: AssetMetadata
@@ -87,10 +87,10 @@ def from_parsed(
     """
     holdings = [
         Holding(
-            stashaway_id=h.stashaway_id,
+            ticker=h.ticker,
             weight=h.weight,
             value=h.value,
-            metadata=resolve(h.stashaway_id, source=parsed.name),
+            metadata=resolve(h.ticker, source=parsed.name),
         )
         for h in parsed.holdings
     ]

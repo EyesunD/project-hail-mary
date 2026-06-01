@@ -49,6 +49,35 @@
   details.drill summary:hover { color: #58a6ff; }
   details.drill summary .pos { color: #3fb950; }
   details.drill summary .neg { color: #f85149; }
+  .pos, td.pos, span.pos { color: #3fb950; }
+  .neg, td.neg, span.neg { color: #f85149; }
+  table.returns-summary { margin: 8px 0 14px; max-width: 760px; }
+  table.returns-summary th, table.returns-summary td { padding: 4px 10px; }
+  table.returns-summary tr.cumulative-row { border-top: 1px solid #30363d; font-weight: 600; }
+  table.returns-summary small { color: #8b949e; font-weight: 400; }
+  small.sgd-sub { color: #8b949e; font-weight: 400; font-size: 11px; }
+  table.reconcile-table th small { display: block; color: #8b949e; font-weight: 400; font-size: 10px; }
+  table.reconcile-table td[data-sort] { text-align: right; font-variant-numeric: tabular-nums; }
+  table.reconcile-table td:first-child[data-sort],
+  table.reconcile-table td:nth-child(2)[data-sort] { text-align: left; font-variant-numeric: normal; }
+  table.sortable th[data-type] { cursor: pointer; user-select: none; position: relative; padding-right: 18px; }
+  table.sortable th[data-type]:hover { color: #58a6ff; }
+  table.sortable th .sort-arrow::after { content: ''; opacity: 0.4; margin-left: 4px; font-size: 10px; }
+  table.sortable th.sort-asc .sort-arrow::after { content: '▲'; opacity: 1; color: #58a6ff; }
+  table.sortable th.sort-desc .sort-arrow::after { content: '▼'; opacity: 1; color: #58a6ff; }
+  .health-check { margin: 14px 0; padding: 12px 16px; border-radius: 6px;
+                  background: #161b22; border-left: 3px solid #30363d; }
+  .health-check h3 { margin: 0 0 8px; font-size: 14px; color: #e6edf3; }
+  .health-check .health-row { font-size: 12px; color: #c9d1d9; padding: 2px 0; }
+  .health-check .lvl-warn { color: #d29922; }
+  .health-check .lvl-err  { color: #f85149; }
+  .health-check .lvl-ok   { color: #3fb950; }
+  .health-check.all-clear { border-left-color: #3fb950; }
+  table.multi-anchor-table tfoot tr { border-top: 1px solid #30363d; }
+  table.multi-anchor-table tfoot tr.bh-row,
+  table.multi-anchor-table tfoot tr.obs-row { font-weight: 600; }
+  table.multi-anchor-table tfoot tr.drift-mva-row,
+  table.multi-anchor-table tfoot tr.drift-bd-row { color: #8b949e; }
   details.drill summary a.port-link { color: #58a6ff; font-weight: 600;
                                        text-decoration: none; border-bottom: 1px dotted #58a6ff; }
   details.drill summary a.port-link:hover { color: #a371f7; border-bottom-color: #a371f7; }
@@ -59,25 +88,26 @@
 <p class="meta">Generated {{ generated_at }}</p>
 
 <div class="meta-grid">
-  <div class="meta-card"><div class="label">Statement Date</div>
-       <div class="val">{{ statement_date }}</div></div>
-  <div class="meta-card"><div class="label">Reconciliation As-Of</div>
-       <div class="val">{{ end_date }}</div></div>
   <div class="meta-card"><div class="label">App Start Snapshot</div>
        <div class="val">{{ start_snapshot_date }}</div></div>
   <div class="meta-card"><div class="label">App End Snapshot</div>
        <div class="val">{{ snapshot_date }}</div></div>
-  <div class="meta-card"><div class="label">Deposits Logged Since Stmt</div>
+  <div class="meta-card"><div class="label">Reconciliation As-Of</div>
+       <div class="val">{{ end_date }}</div></div>
+  <div class="meta-card"><div class="label">Deposits Since Start Anchor</div>
        <div class="val">{{ n_deposits }}</div></div>
 </div>
 
+{{ health_check | safe }}
+
 <h2>Reconciliation — Performance + Model accuracy</h2>
-<p class="footnote">App start and App end both come from your
-<code>Portfolio SGD Values</code> sheet — they are the values Stashaway showed
-on those dates. <strong>Δ Perf</strong> = app_end − app_start − deposits
-(real performance, deposit-adjusted). <strong>Our Model</strong> is the
-piecewise-compounded sleeve value used to validate the model. <strong>Gap</strong>
-= our model + deposits − app_end. Status:
+<p class="footnote">App start and App end both come from the
+<code>PortfolioValue</code> sheet. <strong>Δ Perf</strong> = app_end − app_start − deposits
+(real performance, deposit-adjusted). <strong>+ Deposits</strong> column is informational —
+deposits between the start and end anchor are auto-injected into the BH model at their date
+(allocated across the sleeve's holdings at the prevailing target weights), so they are
+ALREADY reflected in <strong>Our Model</strong>. <strong>Gap</strong> = our model − app_end
+(no separate deposit add — would double-count). Status:
 <span class="badge ok">exact</span> &lt; 0.05% &nbsp;
 <span class="badge ok">ok</span> &lt; 0.3% &nbsp;
 <span class="badge noise">noise</span> &lt; 1% &nbsp;
@@ -92,10 +122,11 @@ today value. <strong>Total row</strong> at the bottom of each sleeve sums to the
 "Total" cell in the reconciliation table above.</p>
 {{ drilldown | safe }}
 
-<h2>Deposits log (post-stmt)</h2>
+<h2>Deposits log (post start-anchor)</h2>
 <p class="footnote">Rows from <code>holding.xlsx</code> &gt; Deposits sheet, filtered to
-dates after the statement. Anything on/before {{ statement_date }} is already in the statement's
-<code>total_value</code> and not counted again.</p>
+dates strictly after the start anchor ({{ start_snapshot_date }}). Anything on/before
+that date is already in <code>App ({{ start_snapshot_date }})</code> and is not
+counted again. Deposits are also auto-injected into the BH/DR model at their date.</p>
 {{ deposits_log | safe }}
 
 <h2>Methodology</h2>
@@ -166,6 +197,76 @@ dates after the statement. Anything on/before {{ statement_date }} is already in
   }
   document.addEventListener("DOMContentLoaded", function () {
     document.querySelectorAll("table.ds-table").forEach(attach);
+  });
+})();
+</script>
+
+<script>
+// Sortable tables: click any <th data-type="..."> to sort. Sort key is read
+// from each cell's data-sort attribute (set server-side as a raw number for
+// numeric columns); falls back to textContent. tfoot rows (TOTAL) are not
+// reordered. Re-clicking a sorted column reverses the direction.
+(function () {
+  function parseKey(cell, type) {
+    var raw = cell.getAttribute("data-sort");
+    if (raw === null) raw = cell.textContent;
+    if (raw === undefined || raw === "" || raw === "—") {
+      return type === "num" ? Number.NaN : "";
+    }
+    if (type === "num" || type === "status") {
+      var n = parseFloat(raw);
+      return Number.isNaN(n) ? Number.NaN : n;
+    }
+    return raw.trim().toLowerCase();
+  }
+  function compare(a, b, type, asc) {
+    var av = parseKey(a, type), bv = parseKey(b, type);
+    var aNaN = (typeof av === "number" && Number.isNaN(av));
+    var bNaN = (typeof bv === "number" && Number.isNaN(bv));
+    if (aNaN && bNaN) return 0;
+    if (aNaN) return 1;   // empties always last
+    if (bNaN) return -1;
+    if (av === bv) return 0;
+    return (av < bv ? -1 : 1) * (asc ? 1 : -1);
+  }
+  function sortBy(table, colIdx, type, asc) {
+    var tbody = table.querySelector("tbody");
+    if (!tbody) return;
+    var rows = Array.prototype.slice.call(tbody.rows);
+    rows.sort(function (r1, r2) {
+      return compare(r1.cells[colIdx], r2.cells[colIdx], type, asc);
+    });
+    rows.forEach(function (r) { tbody.appendChild(r); });
+    // Update arrow indicators
+    table.querySelectorAll("thead th").forEach(function (th, i) {
+      th.classList.remove("sort-asc", "sort-desc");
+      if (i === colIdx) th.classList.add(asc ? "sort-asc" : "sort-desc");
+    });
+    table.dataset.sortCol = colIdx;
+    table.dataset.sortDir = asc ? "asc" : "desc";
+  }
+  function attachSort(table) {
+    if (table.dataset.sortAttached) return;
+    table.dataset.sortAttached = "1";
+    table.querySelectorAll("thead th[data-type]").forEach(function (th, idx) {
+      th.addEventListener("click", function () {
+        var currentCol = parseInt(table.dataset.sortCol || "-1", 10);
+        var currentDir = table.dataset.sortDir || "desc";
+        var asc = (currentCol === idx) ? (currentDir !== "asc") : false;
+        sortBy(table, idx, th.dataset.type, asc);
+      });
+    });
+    // Apply default sort if specified
+    var defaultCol = parseInt(table.dataset.defaultSort || "-1", 10);
+    if (defaultCol >= 0) {
+      var th = table.querySelectorAll("thead th")[defaultCol];
+      var type = th ? th.dataset.type : "num";
+      var asc = (table.dataset.defaultDir || "desc") === "asc";
+      sortBy(table, defaultCol, type || "num", asc);
+    }
+  }
+  document.addEventListener("DOMContentLoaded", function () {
+    document.querySelectorAll("table.sortable").forEach(attachSort);
   });
 })();
 </script>

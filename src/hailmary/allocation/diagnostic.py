@@ -2092,6 +2092,7 @@ def render_html_report(
     align_window: bool = True,
     target_ann_return: float = 0.05,
     reconciliation_as_of: date | datetime | None = None,
+    links_path: Path | str = Path("data/holding.xlsx"),
 ) -> Path:
     """Run all diagnostics and write a self-contained HTML report.
 
@@ -2122,7 +2123,7 @@ def render_html_report(
     # entire report uses Stashaway's rebalancing anchor instead of just the
     # statement-date snapshot. Empty dict if file or column not present —
     # everything falls back gracefully to statement weights.
-    target_weights_by_portfolio = load_target_weights()
+    target_weights_by_portfolio = load_target_weights(Path(links_path))
 
     book_perf = book_performance(
         portfolios,
@@ -2228,6 +2229,7 @@ def render_html_report(
             price_source=price_source,
             fx_series_usd_sgd=fx_series_usd_sgd,
             target_weights_by_portfolio=target_weights_by_portfolio,
+            links_path=links_path,
         ),
         redundancy=_redundancy_to_html(pairs, threshold=redundancy_threshold),
         risk_by_portfolio=_risk_to_html(risk["by_portfolio"]),
@@ -2518,7 +2520,7 @@ def _target_weights_at(
 
 def _portfolio_goal_links(
     portfolios: Sequence[Portfolio],
-    links_path: Path = Path("data/holding.xlsx"),
+    links_path: Path | str = Path("data/holding.xlsx"),
 ) -> dict[str, str]:
     """Best-effort map of portfolio name → Stashaway app goal URL.
 
@@ -2527,6 +2529,7 @@ def _portfolio_goal_links(
     ``app.stashaway.sg/asset-details/<ticker>/goal/<goal_id>``), and returns
     a goal-page URL per portfolio. Returns empty dict if the file is missing.
     """
+    links_path = Path(links_path)
     if not links_path.exists():
         return {}
     try:
@@ -2573,6 +2576,7 @@ def _holdings_drilldown_to_html(
     price_source: Any | None = None,
     fx_series_usd_sgd: pd.Series | None = None,
     target_weights_by_portfolio: dict[str, dict[str, float]] | None = None,
+    links_path: Path | str = Path("data/holding.xlsx"),
 ) -> str:
     """Render a collapsible per-portfolio drill-down listing each holding's
     starting value, return since statement, current value, and weight.
@@ -2589,7 +2593,7 @@ def _holdings_drilldown_to_html(
     if not holdings_books:
         return "<p>No portfolios to drill into.</p>"
 
-    goal_urls = _portfolio_goal_links(portfolios)
+    goal_urls = _portfolio_goal_links(portfolios, links_path=links_path)
 
     intro = (
         '<p class="footnote">Click any portfolio to expand its holdings. '

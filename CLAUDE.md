@@ -19,12 +19,23 @@ it once the bar-level surface is settled. The cross-sectional factor path
 (`MultiFactorModel → FactorPortfolio`) is similarly retained for future multi-signal
 expansion.
 
-A separate **allocation diagnostic path** (`hailmary.allocation`) ingests real Stashaway
-PDF statements, role-tags portfolios, reconstructs returns via proxies through the
-existing `DataProvider` registry, and renders a self-contained HTML report covering
-combined-book exposure, correlation/redundancy, risk contribution, and Sharpe deltas vs
-`MANAGED_BENCHMARK`-tagged portfolios. Phase 1 only; FX conversion and longer-horizon
-Sharpe re-runs are deferred.
+A separate **allocation diagnostic path** (`hailmary.allocation`) ingests the user's
+Stashaway book directly from `data/holding.xlsx` (sheet-driven, see `holdings_book.load_book`;
+the legacy PDF parser in `statements.py` is kept for spot-checks but unwired from the main
+flow). It role-tags portfolios via `book_config.ROLES`, reconstructs returns via
+`DataProvider` proxies, and renders two HTML reports:
+
+- **`reports/allocation_diagnostic.html`** (via `diagnostic.render_html_report`) — combined-book
+  exposure, correlation/redundancy, risk contribution, benchmark deltas vs `MANAGED_BENCHMARK`
+  sleeves, per-holding drilldown.
+- **`reports/reconcile.html`** (via `reconcile.render_reconcile_report`) — per-sleeve
+  trust-check vs the app. Multi-anchor BH+DR model anchored at each `PortfolioValue` snapshot,
+  with mid-period deposits auto-injected at their date. Top table = sleeve totals (Gap =
+  our_model − app_end); drilldown = per-holding × per-anchor timeline with 1M / cumulative
+  deltas in native + SGD, plus BH-vs-Observed and BH-vs-DR drift rows.
+- A `book_health_check()` runs at the top of every reconcile and flags integrity gaps
+  (untagged portfolios, unknown tickers, weight-sum violations, FX staleness, mid-period
+  deposits) as a visible banner.
 
 ## Package layout
 
@@ -55,13 +66,17 @@ src/hailmary/
 │   ├── theme.py    # House theme (dark, high-contrast)
 │   ├── performance_charts.py  # PerformanceCharts + tearsheet (for BacktestResult)
 │   └── factor_charts.py       # FactorCharts + factor tearsheet
-├── allocation/     # Stashaway book ingestion + allocation diagnostic (Phase 1)
-│   ├── universe.py     # STASHAWAY_UNIVERSE: Stashaway asset → tradeable ticker + metadata
-│   ├── statements.py   # PDF parser (pdfplumber) + JSON fallback + parquet cache
-│   ├── portfolios.py   # Portfolio, Holding, Role (CUSTOM/MANAGED_BENCHMARK/PROTECTED/HOLDING)
-│   ├── returns.py      # portfolio_returns — reconstruct series from current weights
-│   ├── diagnostic.py   # combined_exposure, correlation_matrix, redundancy_pairs, risk_contribution, benchmark_comparison, render_html_report
-│   └── book_config.py  # Centralised role-tag mapping for the user's actual book
+├── allocation/     # Stashaway book ingestion + allocation diagnostic + reconcile
+│   ├── universe.py        # STASHAWAY_UNIVERSE: Yahoo ticker → AssetMetadata
+│   ├── holdings_book.py   # load_book(holding.xlsx, as_of) — main sheet-driven ingestion
+│   ├── statements.py      # Legacy PDF parser — kept for spot-checks, unwired from main flow
+│   ├── portfolios.py      # Portfolio, Holding, Role (HOLDING/MANAGED_BENCHMARK/PROTECTED/CUSTOM)
+│   ├── returns.py         # portfolio_returns — daily-rebalance reconstruction (for diagnostic)
+│   ├── diagnostic.py      # render_html_report + combined_exposure, correlation, redundancy, risk, benchmarks
+│   ├── reconcile.py       # render_reconcile_report — multi-anchor BH+DR + deposit injection + book_health_check
+│   ├── scenarios.py       # Scenario edit helpers + scenario_compare + render_scenario_report
+│   ├── etf_explorer.py    # ETF universe browser (standalone)
+│   └── book_config.py     # ROLES + MGMT_FEES_ANNUAL for the user's actual book
 └── cli/            # Click CLI (hailmary fetch, clear-cache, info)
 ```
 

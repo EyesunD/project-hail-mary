@@ -11,18 +11,15 @@ drawdown-bucket Sharpe and rolling correlation with the user's book.
 
 from __future__ import annotations
 
-import warnings
 from collections.abc import Sequence
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pandas as pd
 from loguru import logger
 
 from hailmary.allocation.diagnostic import (
-    _fmt_compact,
     _style_dd,
     _style_pos_neg,
     _style_sharpe,
